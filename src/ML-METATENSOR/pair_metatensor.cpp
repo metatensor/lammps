@@ -25,6 +25,8 @@
 #include "citeme.h"
 #include "comm.h"
 
+#include "./metatensor_timer.h"
+
 #include "neigh_list.h"
 #include "neigh_request.h"
 
@@ -453,6 +455,8 @@ void PairMetatensor::init_list(int id, NeighList *ptr) {
 
 
 void PairMetatensor::compute(int eflag, int vflag) {
+    auto tm = ScopeTimer("PairMetatensor::compute");
+
     if (eflag || vflag) {
         ev_setup(eflag, vflag);
     } else {
@@ -492,6 +496,7 @@ void PairMetatensor::compute(int eflag, int vflag) {
 
     torch::IValue result_ivalue;
     try {
+        auto tm = ScopeTimer("model forward");
         result_ivalue = mts_data->model->forward({
             std::vector<metatensor_torch::System>{system},
             mts_data->evaluation_options,
@@ -550,7 +555,11 @@ void PairMetatensor::compute(int eflag, int vflag) {
     mts_data->system_adaptor->strain.mutable_grad() = torch::Tensor();
 
     // compute forces/virial with backward propagation
-    energy_tensor.backward(-torch::ones_like(energy_tensor));
+    {
+        auto tm = ScopeTimer("model backward");
+        energy_tensor.backward(-torch::ones_like(energy_tensor));
+
+    }
     auto forces_tensor = mts_data->system_adaptor->positions.grad();
     assert(forces_tensor.is_cpu() && forces_tensor.scalar_type() == torch::kFloat64);
 

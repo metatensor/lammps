@@ -22,6 +22,8 @@
 
 #include "neigh_list.h"
 
+#include "./metatensor_timer.h"
+
 using namespace LAMMPS_NS;
 
 MetatensorSystemAdaptor::MetatensorSystemAdaptor(LAMMPS *lmp, MetatensorSystemOptions options):
@@ -91,6 +93,7 @@ static std::array<int32_t, 3> cell_shifts(
 
 
 void MetatensorSystemAdaptor::setup_neighbors(metatensor_torch::System& system, NeighList *list) {
+    auto tm = ScopeTimer("convert neighbors");
     auto dtype = system->positions().scalar_type();
     auto device = system->positions().device();
 
@@ -322,6 +325,7 @@ metatensor_torch::System MetatensorSystemAdaptor::system_from_lmp(
     torch::ScalarType dtype,
     torch::Device device
 ) {
+    auto tm = ScopeTimer("convert system");
     double** x = atom->x;
     auto total_n_atoms = atom->nlocal + atom->nghost;
 
