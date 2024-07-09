@@ -40,9 +40,10 @@ public:
     void allocate();
 private:
     PairMetatensorData* mts_data;
+    NeighList *mts_list;
 
     // mapping from LAMMPS types to metatensor types
-    int32_t* type_mapping;
+    int32_t *type_mapping;
 };
 
 }    // namespace LAMMPS_NS

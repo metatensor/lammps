@@ -19,54 +19,26 @@
 #include "atom.h"
 #include "domain.h"
 #include "error.h"
-#include "neighbor.h"
 
 #include "neigh_list.h"
-#include "neigh_request.h"
 
 using namespace LAMMPS_NS;
 
-/* ---------------------------------------------------------------------- */
-
-MetatensorSystemAdaptor::MetatensorSystemAdaptor(LAMMPS *lmp, Pair* requestor, MetatensorSystemOptions options):
+MetatensorSystemAdaptor::MetatensorSystemAdaptor(LAMMPS *lmp, MetatensorSystemOptions options):
     Pointers(lmp),
-    list_(nullptr),
     options_(std::move(options)),
     caches_(),
     atomic_types_(torch::zeros({0}, torch::TensorOptions().dtype(torch::kInt32).device(torch::kCPU)))
 {
-    // We ask LAMMPS for a full neighbor lists because we need to know about
-    // ALL pairs, even if options->full_list() is false. We will then filter
-    // the pairs to only include each pair once where needed.
-    auto request = neighbor->add_request(requestor, NeighConst::REQ_FULL | NeighConst::REQ_GHOST);
-    request->set_id(0);
-    request->set_cutoff(options_.interaction_range);
+    auto tensor_options = torch::TensorOptions()
+        .dtype(torch::kFloat64)
+        .device(torch::kCPU)
+        .requires_grad(true);
 
-    this->strain = torch::eye(3, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU).requires_grad(true));
+    this->strain = torch::eye(3, tensor_options);
 }
 
-MetatensorSystemAdaptor::MetatensorSystemAdaptor(LAMMPS *lmp, Compute* requestor, MetatensorSystemOptions options):
-    Pointers(lmp),
-    list_(nullptr),
-    options_(std::move(options)),
-    caches_(),
-    atomic_types_(torch::zeros({0}, torch::TensorOptions().dtype(torch::kInt32).device(torch::kCPU)))
-{
-    auto request = neighbor->add_request(requestor, NeighConst::REQ_FULL | NeighConst::REQ_GHOST);
-    request->set_id(0);
-    request->set_cutoff(options_.interaction_range);
-
-    this->strain = torch::eye(3, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU).requires_grad(true));
-}
-
-MetatensorSystemAdaptor::~MetatensorSystemAdaptor() {
-
-}
-
-void MetatensorSystemAdaptor::init_list(int id, NeighList* ptr) {
-    assert(id == 0);
-    list_ = ptr;
-}
+MetatensorSystemAdaptor::~MetatensorSystemAdaptor() {}
 
 void MetatensorSystemAdaptor::add_nl_request(double cutoff, metatensor_torch::NeighborListOptions request) {
     if (cutoff > options_.interaction_range) {
@@ -118,7 +90,7 @@ static std::array<int32_t, 3> cell_shifts(
 }
 
 
-void MetatensorSystemAdaptor::setup_neighbors(metatensor_torch::System& system) {
+void MetatensorSystemAdaptor::setup_neighbors(metatensor_torch::System& system, NeighList *list) {
     auto dtype = system->positions().scalar_type();
     auto device = system->positions().device();
 
@@ -183,12 +155,12 @@ void MetatensorSystemAdaptor::setup_neighbors(metatensor_torch::System& system) 
         cache.samples.clear();
         cache.distances_f32.clear();
         cache.distances_f64.clear();
-        for (int ii=0; ii<(list_->inum + list_->gnum); ii++) {
-            auto atom_i = list_->ilist[ii];
+        for (int ii=0; ii<(list->inum + list->gnum); ii++) {
+            auto atom_i = list->ilist[ii];
             auto original_atom_i = original_atom_id_[atom_i];
 
-            auto neighbors = list_->firstneigh[ii];
-            for (int jj=0; jj<list_->numneigh[ii]; jj++) {
+            auto neighbors = list->firstneigh[ii];
+            for (int jj=0; jj<list->numneigh[ii]; jj++) {
                 auto atom_j = neighbors[jj];
                 auto original_atom_j = original_atom_id_[atom_j];
 
@@ -345,6 +317,7 @@ void MetatensorSystemAdaptor::setup_neighbors(metatensor_torch::System& system) 
 
 
 metatensor_torch::System MetatensorSystemAdaptor::system_from_lmp(
+    NeighList* list,
     bool do_virial,
     torch::ScalarType dtype,
     torch::Device device
@@ -394,6 +367,6 @@ metatensor_torch::System MetatensorSystemAdaptor::system_from_lmp(
         cell
     );
 
-    this->setup_neighbors(system);
+    this->setup_neighbors(system, list);
     return system;
 }

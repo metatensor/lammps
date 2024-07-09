@@ -77,17 +77,19 @@ struct MetatensorNeighborsData {
 
 class MetatensorSystemAdaptor : public Pointers {
 public:
-    MetatensorSystemAdaptor(LAMMPS* lmp, Pair* requestor, MetatensorSystemOptions options);
-    MetatensorSystemAdaptor(LAMMPS* lmp, Compute* requestor, MetatensorSystemOptions options);
+    MetatensorSystemAdaptor(LAMMPS *lmp, MetatensorSystemOptions options);
 
     ~MetatensorSystemAdaptor();
-
-    void init_list(int id, NeighList* ptr);
 
     void add_nl_request(double cutoff, metatensor_torch::NeighborListOptions request);
 
     // Create a metatensor system matching the LAMMPS system data
-    metatensor_torch::System system_from_lmp(bool do_virial, torch::ScalarType dtype, torch::Device device);
+    metatensor_torch::System system_from_lmp(
+        NeighList* list,
+        bool do_virial,
+        torch::ScalarType dtype,
+        torch::Device device
+    );
 
     // Explicit strain for virial calculations. This uses the same dtype/device
     // as LAMMPS data (positions, …)
@@ -96,17 +98,14 @@ public:
     // conversion) to access its gradient
     torch::Tensor positions;
 
-private:
+ private:
     // setup the metatensor neighbors list from the internal LAMMPS one
-    void setup_neighbors(metatensor_torch::System& system);
+    void setup_neighbors(metatensor_torch::System& system, NeighList* list);
 
     // options for this system adaptor
     MetatensorSystemOptions options_;
 
-    // LAMMPS NL
-    NeighList* list_;
-    // allocations caches for all the NL requested by
-    // the model
+    // allocations caches for all the NL requested by the model
     std::vector<MetatensorNeighborsData> caches_;
     // allocation cache for the atomic types in the system
     torch::Tensor atomic_types_;
