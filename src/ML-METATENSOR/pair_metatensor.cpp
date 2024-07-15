@@ -565,7 +565,7 @@ void PairMetatensor::compute(int eflag, int vflag) {
 
     if (vflag_global) {
         auto virial_tensor = mts_data->system_adaptor->strain.grad();
-        assert(virial_tensor.is_cpu() && forces_tensor.scalar_type() == torch::kFloat64);
+        assert(virial_tensor.is_cpu() && virial_tensor.scalar_type() == torch::kFloat64);
         auto predicted_virial = virial_tensor.accessor<double, 2>();
 
         virial[0] += predicted_virial[0][0];
