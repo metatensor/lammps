@@ -211,13 +211,15 @@ void MetatensorSystemAdaptorKokkos<LMPDeviceType>::setup_neighbors(metatensor_to
     auto centers_tensor = torch::from_blob(
         centers.data(),
         {total_number_of_pairs},
-        torch::TensorOptions().dtype(torch::kInt32).device(device)
+        torch::TensorOptions().dtype(torch::kInt32).device(torch::kCPU)
     );
+    centers_tensor = centers_tensor.to(device);
     auto neighbors_tensor = torch::from_blob(
         neighbors.data(),
         {total_number_of_pairs},
-        torch::TensorOptions().dtype(torch::kInt32).device(device)
+        torch::TensorOptions().dtype(torch::kInt32).device(torch::kCPU)
     );
+    neighbors_tensor = neighbors_tensor.to(device);
 
     // change centers and neighbors to the original atom ids
     auto centers_tensor_original_id = original_atom_id_tensor.index_select(0, centers_tensor);
