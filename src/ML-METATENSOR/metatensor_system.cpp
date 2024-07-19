@@ -90,7 +90,7 @@ static std::array<int32_t, 3> cell_shifts(
 }
 
 
-void MetatensorSystemAdaptor::setup_neighbors(metatensor_torch::System& system, NeighList *list) {
+void MetatensorSystemAdaptor::setup_neighbors_remap(metatensor_torch::System& system, NeighList *list) {
     auto dtype = system->positions().scalar_type();
     auto device = system->positions().device();
 
@@ -315,10 +315,120 @@ void MetatensorSystemAdaptor::setup_neighbors(metatensor_torch::System& system, 
     }
 }
 
+void MetatensorSystemAdaptor::setup_neighbors_no_remap(metatensor_torch::System& system, NeighList *list) {
+    auto dtype = system->positions().scalar_type();
+    auto device = system->positions().device();
+
+    double** x = atom->x;
+    auto total_n_atoms = atom->nlocal + atom->nghost;
+
+    for (auto& cache: caches_) {
+        auto cutoff2 = cache.cutoff * cache.cutoff;
+        auto full_list = cache.options->full_list();
+
+        // convert from LAMMPS neighbors list to metatensor format
+        cache.known_samples.clear();
+        cache.samples.clear();
+        cache.distances_f32.clear();
+        cache.distances_f64.clear();
+        for (int ii=0; ii<(list->inum + list->gnum); ii++) {
+            auto atom_i = list->ilist[ii];
+
+            auto neighbors = list->firstneigh[ii];
+            for (int jj=0; jj<list->numneigh[ii]; jj++) {
+                auto atom_j = neighbors[jj];
+
+                if (!full_list && atom_i > atom_j) {
+                    // Remove extra pairs if the model requested half-lists
+                    continue;
+                }
+
+                auto distance = std::array<double, 3>{
+                    x[atom_j][0] - x[atom_i][0],
+                    x[atom_j][1] - x[atom_i][1],
+                    x[atom_j][2] - x[atom_i][2],
+                };
+
+                auto distance2 = (
+                    distance[0] * distance[0] +
+                    distance[1] * distance[1] +
+                    distance[2] * distance[2]
+                );
+                if (distance2 > cutoff2) {
+                    // LAMMPS neighbors list contains some pairs after the
+                    // cutoff, we filter them here
+                    continue;
+                }
+
+                auto sample = std::array<int32_t, 5>{atom_i, atom_j, 0, 0, 0};
+
+
+                cache.samples.push_back(sample);
+
+                if (dtype == torch::kFloat64) {
+                    cache.distances_f64.push_back(distance);
+                } else if (dtype == torch::kFloat32) {
+                    cache.distances_f32.push_back({
+                        static_cast<float>(distance[0]),
+                        static_cast<float>(distance[1]),
+                        static_cast<float>(distance[2])
+                    });
+                } else {
+                    // should be unreachable
+                    error->all(FLERR, "invalid dtype, this is a bug");
+                }
+            }
+        }
+
+        int64_t n_pairs = cache.samples.size();
+        auto samples_values = torch::from_blob(
+            reinterpret_cast<int32_t*>(cache.samples.data()),
+            {n_pairs, 5},
+            torch::TensorOptions().dtype(torch::kInt32).device(torch::kCPU)
+        );
+
+        auto samples = torch::make_intrusive<metatensor_torch::LabelsHolder>(
+            std::vector<std::string>{"first_atom", "second_atom", "cell_shift_a", "cell_shift_b", "cell_shift_c"},
+            samples_values
+        );
+
+        auto distances_vectors = torch::Tensor();
+        if (dtype == torch::kFloat64) {
+            distances_vectors = torch::from_blob(
+                cache.distances_f64.data(),
+                {n_pairs, 3, 1},
+                torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU)
+            );
+        } else if (dtype == torch::kFloat32) {
+            distances_vectors = torch::from_blob(
+                cache.distances_f32.data(),
+                {n_pairs, 3, 1},
+                torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCPU)
+            );
+        } else {
+            // should be unreachable
+            error->all(FLERR, "invalid dtype, this is a bug");
+        }
+
+        auto neighbors = torch::make_intrusive<metatensor_torch::TensorBlockHolder>(
+            distances_vectors.to(dtype).to(device),
+            samples->to(device),
+            std::vector<metatensor_torch::TorchLabels>{
+                metatensor_torch::LabelsHolder::create({"xyz"}, {{0}, {1}, {2}})->to(device),
+            },
+            metatensor_torch::LabelsHolder::create({"distance"}, {{0}})->to(device)
+        );
+
+        metatensor_torch::register_autograd_neighbors(system, neighbors, options_.check_consistency);
+        system->add_neighbor_list(cache.options, neighbors);
+    }
+}
+
 
 metatensor_torch::System MetatensorSystemAdaptor::system_from_lmp(
     NeighList* list,
     bool do_virial,
+    bool remap_pairs,
     torch::ScalarType dtype,
     torch::Device device
 ) {
@@ -367,6 +477,11 @@ metatensor_torch::System MetatensorSystemAdaptor::system_from_lmp(
         cell
     );
 
-    this->setup_neighbors(system, list);
+    if (remap_pairs) {
+        this->setup_neighbors_remap(system, list);
+    } else {
+        this->setup_neighbors_no_remap(system, list);
+    }
+
     return system;
 }

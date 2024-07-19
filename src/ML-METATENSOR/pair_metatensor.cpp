@@ -61,6 +61,9 @@ struct LAMMPS_NS::PairMetatensorData {
     // should metatensor check the data LAMMPS send to the model
     // and the data the model returns?
     bool check_consistency;
+    // whether pairs should be remapped, removing pairs between ghosts if there
+    // is an equivalent pair involving at least one local atom.
+    bool remap_pairs;
     // how far away the model needs to know about neighbors
     double interaction_range;
 
@@ -208,6 +211,18 @@ void PairMetatensor::settings(int argc, char ** argv) {
                 mts_data->check_consistency = false;
             } else {
                 error->all(FLERR, "expected <on/off> after 'check_consistency' in pair_style metatensor, got '{}'", argv[i + 1]);
+            }
+
+            i += 1;
+        } else if (strcmp(argv[i], "remap_pairs") == 0) {
+            if (i == argc - 1) {
+                error->all(FLERR, "expected <on/off> after 'remap_pairs' in pair_style metatensor, got nothing");
+            } else if (strcmp(argv[i + 1], "on") == 0) {
+                mts_data->check_consistency = true;
+            } else if (strcmp(argv[i + 1], "off") == 0) {
+                mts_data->check_consistency = false;
+            } else {
+                error->all(FLERR, "expected <on/off> after 'remap_pairs' in pair_style metatensor, got '{}'", argv[i + 1]);
             }
 
             i += 1;
@@ -473,7 +488,11 @@ void PairMetatensor::compute(int eflag, int vflag) {
 
     // transform from LAMMPS to metatensor System
     auto system = mts_data->system_adaptor->system_from_lmp(
-        mts_list, static_cast<bool>(vflag_global), dtype, mts_data->device
+        mts_list,
+        static_cast<bool>(vflag_global),
+        mts_data->remap_pairs,
+        dtype,
+        mts_data->device
     );
 
     // only run the calculation for atoms actually in the current domain
