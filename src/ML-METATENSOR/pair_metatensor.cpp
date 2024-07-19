@@ -77,6 +77,7 @@ PairMetatensorData::PairMetatensorData(std::string length_unit, std::string ener
     system_adaptor(nullptr),
     device(torch::kCPU),
     check_consistency(false),
+    remap_pairs(true),
     interaction_range(-1)
 {
     auto options = torch::TensorOptions().dtype(torch::kInt32);
