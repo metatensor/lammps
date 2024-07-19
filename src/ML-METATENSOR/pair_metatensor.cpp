@@ -79,9 +79,6 @@ PairMetatensorData::PairMetatensorData(std::string length_unit, std::string ener
     auto options = torch::TensorOptions().dtype(torch::kInt32);
     this->selected_atoms_values = torch::zeros({0, 2}, options);
 
-    // default to true for now, this will be changed to false later
-    this->check_consistency = true;
-
     // Initialize evaluation_options
     this->evaluation_options = torch::make_intrusive<metatensor_torch::ModelEvaluationOptionsHolder>();
     this->evaluation_options->set_length_unit(std::move(length_unit));
