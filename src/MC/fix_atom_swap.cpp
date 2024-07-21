@@ -50,10 +50,10 @@ using namespace FixConst;
 /* ---------------------------------------------------------------------- */
 
 FixAtomSwap::FixAtomSwap(LAMMPS *lmp, int narg, char **arg) :
-    Fix(lmp, narg, arg), region(nullptr), idregion(nullptr), type_list(nullptr), mu(nullptr),
-    qtype(nullptr), sqrt_mass_ratio(nullptr), local_swap_iatom_list(nullptr),
-    local_swap_jatom_list(nullptr), local_swap_atom_list(nullptr), random_equal(nullptr),
-    random_unequal(nullptr), c_pe(nullptr)
+    Fix(lmp, narg, arg), region(nullptr), idregion(nullptr), type_list(nullptr),
+    swap_type_list(nullptr), swap_qtype_list(nullptr), mu(nullptr), qtype(nullptr),
+    sqrt_mass_ratio(nullptr), local_swap_iatom_list(nullptr), local_swap_jatom_list(nullptr),
+    local_swap_atom_list(nullptr), random_equal(nullptr), random_unequal(nullptr), c_pe(nullptr)
 {
   if (narg < 10) error->all(FLERR, "Illegal fix atom/swap command");
 
@@ -81,6 +81,8 @@ FixAtomSwap::FixAtomSwap(LAMMPS *lmp, int narg, char **arg) :
   beta = 1.0 / (force->boltz * temperature);
 
   memory->create(type_list, atom->ntypes, "atom/swap:type_list");
+  memory->create(swap_type_list, 2, "atom/swap:swap_type_list");
+  memory->create(swap_qtype_list, 2, "atom/swap:swap_qtype_list");
   memory->create(mu, atom->ntypes + 1, "atom/swap:mu");
   for (int i = 1; i <= atom->ntypes; i++) mu[i] = 0.0;
 
@@ -125,6 +127,8 @@ FixAtomSwap::FixAtomSwap(LAMMPS *lmp, int narg, char **arg) :
 
 FixAtomSwap::~FixAtomSwap()
 {
+  memory->destroy(swap_type_list);
+  memory->destroy(swap_qtype_list);
   memory->destroy(type_list);
   memory->destroy(mu);
   memory->destroy(qtype);
@@ -171,7 +175,7 @@ void FixAtomSwap::options(int narg, char **arg)
       while (iarg < narg) {
         if (isalpha(arg[iarg][0])) break;
         if (nswaptypes >= atom->ntypes) error->all(FLERR, "Illegal fix atom/swap command");
-        type_list[nswaptypes] = utils::expand_type_int(FLERR, arg[iarg], Atom::ATOM, lmp);
+        type_list[nswaptypes] = utils::numeric(FLERR, arg[iarg], false, lmp);
         nswaptypes++;
         iarg++;
       }
@@ -217,8 +221,8 @@ void FixAtomSwap::init()
     if (nswaptypes != nmutypes)
       error->all(FLERR, "Need nswaptypes mu values in fix atom/swap command");
   } else {
-    if (nswaptypes != 2)
-      error->all(FLERR, "Only 2 types allowed when not using semi-grand in fix atom/swap command");
+    // if (nswaptypes != 2)
+    //   error->all(FLERR, "Only 2 types allowed when not using semi-grand in fix atom/swap command");
     if (nmutypes != 0)
       error->all(FLERR, "Mu not allowed when not using semi-grand in fix atom/swap command");
   }
@@ -450,16 +454,19 @@ int FixAtomSwap::attempt_swap()
 
   int i = pick_i_swap_atom();
   int j = pick_j_swap_atom();
-  int itype = type_list[0];
-  int jtype = type_list[1];
+
+  int itype = swap_type_list[0];
+  int jtype = swap_type_list[1];
+  int qitype = swap_qtype_list[0];
+  int qjtype = swap_qtype_list[1];
 
   if (i >= 0) {
     atom->type[i] = jtype;
-    if (atom->q_flag) atom->q[i] = qtype[1];
+    if (atom->q_flag) atom->q[i] = qjtype;
   }
   if (j >= 0) {
     atom->type[j] = itype;
-    if (atom->q_flag) atom->q[j] = qtype[0];
+    if (atom->q_flag) atom->q[j] = qitype;
   }
 
   // if unequal_cutoffs, call comm->borders() and rebuild neighbor list
@@ -509,12 +516,12 @@ int FixAtomSwap::attempt_swap()
   //   since will be done on next cycle or in Verlet when this fix finishes
 
   if (i >= 0) {
-    atom->type[i] = type_list[0];
-    if (atom->q_flag) atom->q[i] = qtype[0];
+    atom->type[i] = itype;
+    if (atom->q_flag) atom->q[i] = qitype;
   }
   if (j >= 0) {
-    atom->type[j] = type_list[1];
-    if (atom->q_flag) atom->q[j] = qtype[1];
+    atom->type[j] = jtype;
+    if (atom->q_flag) atom->q[j] = qjtype;
   }
 
   return 0;
@@ -656,6 +663,18 @@ void FixAtomSwap::update_swap_atoms_list()
   int nlocal = atom->nlocal;
   int *type = atom->type;
   double **x = atom->x;
+  int iswaptype, jswaptype;
+  while (true) {
+    iswaptype = static_cast<int>(nswaptypes * random_unequal->uniform());
+    jswaptype = static_cast<int>(nswaptypes * random_unequal->uniform());
+    if (iswaptype != jswaptype) break;
+  }
+  swap_type_list[0] = type_list[iswaptype];
+  swap_type_list[1] = type_list[jswaptype];
+  if (atom->q_flag) {
+    swap_qtype_list[0] = qtype[iswaptype];
+    swap_qtype_list[1] = qtype[jswaptype];
+  }
 
   if (atom->nmax > atom_swap_nmax) {
     memory->sfree(local_swap_iatom_list);
@@ -675,10 +694,10 @@ void FixAtomSwap::update_swap_atoms_list()
     for (int i = 0; i < nlocal; i++) {
       if (region->match(x[i][0], x[i][1], x[i][2]) == 1) {
         if (atom->mask[i] & groupbit) {
-          if (type[i] == type_list[0]) {
+          if (type[i] == swap_type_list[0]) {
             local_swap_iatom_list[niswap_local] = i;
             niswap_local++;
-          } else if (type[i] == type_list[1]) {
+          } else if (type[i] == swap_type_list[1]) {
             local_swap_jatom_list[njswap_local] = i;
             njswap_local++;
           }
@@ -689,10 +708,10 @@ void FixAtomSwap::update_swap_atoms_list()
   } else {
     for (int i = 0; i < nlocal; i++) {
       if (atom->mask[i] & groupbit) {
-        if (type[i] == type_list[0]) {
+        if (type[i] == swap_type_list[0]) {
           local_swap_iatom_list[niswap_local] = i;
           niswap_local++;
-        } else if (type[i] == type_list[1]) {
+        } else if (type[i] == swap_type_list[1]) {
           local_swap_jatom_list[njswap_local] = i;
           njswap_local++;
         }
@@ -834,7 +853,7 @@ void FixAtomSwap::restart(char *buf)
 
 void *FixAtomSwap::extract(const char *name, int &dim)
 {
-  if (strcmp(name,"mc_active") == 0) {
+  if (strcmp(name, "mc_active") == 0) {
     dim = 0;
     return (void *) &mc_active;
   }
