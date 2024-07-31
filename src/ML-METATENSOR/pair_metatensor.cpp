@@ -65,7 +65,7 @@ struct LAMMPS_NS::PairMetatensorData {
     // is an equivalent pair involving at least one local atom.
     bool remap_pairs;
     // how far away the model needs to know about neighbors
-    double interaction_range;
+    double max_cutoff;
 
     // allocation cache for the selected atoms
     torch::Tensor selected_atoms_values;
@@ -78,7 +78,7 @@ PairMetatensorData::PairMetatensorData(std::string length_unit, std::string ener
     device(torch::kCPU),
     check_consistency(false),
     remap_pairs(true),
-    interaction_range(-1)
+    max_cutoff(-1)
 {
     auto options = torch::TensorOptions().dtype(torch::kInt32);
     this->selected_atoms_values = torch::zeros({0, 2}, options);
@@ -382,7 +382,7 @@ void PairMetatensor::allocate() {
 }
 
 double PairMetatensor::init_one(int, int) {
-    return mts_data->interaction_range;
+    return mts_data->max_cutoff;
 }
 
 
@@ -429,15 +429,36 @@ void PairMetatensor::init_style() {
     if (range < 0) {
         error->all(FLERR, "interaction_range is negative for this model");
     } else if (!std::isfinite(range)) {
-        error->all(FLERR, "interaction_range is infinite for this model, this is not yet supported");
+        if (comm->nprocs > 1) {
+            error->all(FLERR,
+                "interaction_range is infinite for this model, "
+                "using multiple MPI domains is not supported"
+            );
+        }
+
+        // determine the maximal cutoff in the NL
+        auto requested_nl = mts_data->model->run_method("requested_neighbor_lists");
+        for (const auto& ivalue: requested_nl.toList()) {
+            auto options = ivalue.get().toCustomClass<metatensor_torch::NeighborListOptionsHolder>();
+            auto cutoff = options->engine_cutoff(mts_data->evaluation_options->length_unit());
+
+            mts_data->max_cutoff = std::max(mts_data->max_cutoff, cutoff);
+        }
     } else {
-        mts_data->interaction_range = range;
+        mts_data->max_cutoff = range;
+    }
+
+    if (!std::isfinite(mts_data->max_cutoff)) {
+        error->all(FLERR,
+            "the largest cutoff of this model is infinite, "
+            "we can't compute the corresponding neighbor list"
+        );
     }
 
     // create system adaptor
     auto options = MetatensorSystemOptions{
         this->type_mapping,
-        mts_data->interaction_range,
+        mts_data->max_cutoff,
         mts_data->check_consistency,
     };
     mts_data->system_adaptor = std::make_unique<MetatensorSystemAdaptor>(lmp, options);
@@ -446,7 +467,7 @@ void PairMetatensor::init_style() {
     // ALL pairs, even if options->full_list() is false. We will then filter
     // the pairs to only include each pair once where needed.
     auto request = neighbor->add_request(this, NeighConst::REQ_FULL | NeighConst::REQ_GHOST);
-    request->set_cutoff(mts_data->interaction_range);
+    request->set_cutoff(mts_data->max_cutoff);
 
     // Translate from the metatensor neighbor lists requests to LAMMPS neighbor
     // lists requests.
@@ -454,6 +475,7 @@ void PairMetatensor::init_style() {
     for (const auto& ivalue: requested_nl.toList()) {
         auto options = ivalue.get().toCustomClass<metatensor_torch::NeighborListOptionsHolder>();
         auto cutoff = options->engine_cutoff(mts_data->evaluation_options->length_unit());
+        assert(cutoff <= mts_data->max_cutoff);
 
         mts_data->system_adaptor->add_nl_request(cutoff, options);
     }
