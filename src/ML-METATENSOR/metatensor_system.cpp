@@ -157,11 +157,13 @@ void MetatensorSystemAdaptor::setup_neighbors_remap(metatensor_torch::System& sy
         cache.distances_f64.clear();
         for (int ii=0; ii<(list->inum + list->gnum); ii++) {
             auto atom_i = list->ilist[ii];
+            assert(atom_i < total_n_atoms);
             auto original_atom_i = original_atom_id_[atom_i];
 
             auto neighbors = list->firstneigh[ii];
             for (int jj=0; jj<list->numneigh[ii]; jj++) {
-                auto atom_j = neighbors[jj];
+                auto atom_j = neighbors[jj] & NEIGHMASK;
+                assert(atom_j < total_n_atoms);
                 auto original_atom_j = original_atom_id_[atom_j];
 
                 if (!full_list && original_atom_i > original_atom_j) {
