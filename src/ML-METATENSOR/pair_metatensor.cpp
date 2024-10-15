@@ -522,6 +522,16 @@ void PairMetatensor::compute(int eflag, int vflag) {
     auto energy = result.at("energy").toCustomClass<metatensor_torch::TensorMapHolder>();
     auto energy_block = metatensor_torch::TensorMapHolder::block_by_id(energy, 0);
     auto energy_tensor = energy_block->values();
+
+    // reset gradients to zero before calling backward
+    mts_data->system_adaptor->positions.mutable_grad() = torch::Tensor();
+    mts_data->system_adaptor->strain.mutable_grad() = torch::Tensor();
+
+    // compute forces/virial on device with backward propagation
+    energy_tensor.backward(-torch::ones_like(energy_tensor));
+    auto forces_tensor = mts_data->system_adaptor->positions.grad();
+
+    // move results to cpu for storing
     auto energy_detached = energy_tensor.detach().to(torch::kCPU).to(torch::kFloat64);
     auto energy_samples = energy_block->samples();
 
@@ -562,13 +572,7 @@ void PairMetatensor::compute(int eflag, int vflag) {
         eng_vdwl += global_energy.item<double>();
     }
 
-    // reset gradients to zero before calling backward
-    mts_data->system_adaptor->positions.mutable_grad() = torch::Tensor();
-    mts_data->system_adaptor->strain.mutable_grad() = torch::Tensor();
-
-    // compute forces/virial with backward propagation
-    energy_tensor.backward(-torch::ones_like(energy_tensor));
-    auto forces_tensor = mts_data->system_adaptor->positions.grad();
+    // store forces/virial
     assert(forces_tensor.is_cpu() && forces_tensor.scalar_type() == torch::kFloat64);
 
     auto forces = forces_tensor.accessor<double, 2>();
