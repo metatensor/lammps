@@ -43,6 +43,8 @@
 
 #include "metatensor_system.h"
 
+#include "./metatensor_timer.h"
+
 using namespace LAMMPS_NS;
 
 struct LAMMPS_NS::PairMetatensorData {
@@ -488,6 +490,14 @@ void PairMetatensor::init_list(int id, NeighList *ptr) {
 
 
 void PairMetatensor::compute(int eflag, int vflag) {
+    if (std::getenv("LAMMPS_METATENSOR_PROFILE") != nullptr) {
+        MetatensorTimer::enable(true);
+    } else {
+        MetatensorTimer::enable(false);
+    }
+
+    auto _ = MetatensorTimer("PairMetatensor::compute");
+
     if (eflag || vflag) {
         ev_setup(eflag, vflag);
     } else {
@@ -531,6 +541,7 @@ void PairMetatensor::compute(int eflag, int vflag) {
 
     torch::IValue result_ivalue;
     try {
+        auto _ = MetatensorTimer("running Model::forward");
         result_ivalue = mts_data->model->forward({
             std::vector<metatensor_torch::System>{system},
             mts_data->evaluation_options,
@@ -550,77 +561,85 @@ void PairMetatensor::compute(int eflag, int vflag) {
     mts_data->system_adaptor->strain.mutable_grad() = torch::Tensor();
 
     // compute forces/virial on device with backward propagation
-    energy_tensor.backward(-torch::ones_like(energy_tensor));
-    auto forces_tensor = mts_data->system_adaptor->positions.grad();
+    {
+        auto _ = MetatensorTimer("running Model::backward");
+        energy_tensor.backward(-torch::ones_like(energy_tensor));
+    }
 
-    // move results to cpu for storing
-    auto energy_detached = energy_tensor.detach().to(torch::kCPU).to(torch::kFloat64);
-    auto energy_samples = energy_block->samples();
+    {
+        auto _ = MetatensorTimer("storing model output in LAMMPS data structures");
 
-    // store the energy returned by the model
-    torch::Tensor global_energy;
-    if (eflag_atom) {
-        assert(energy_samples->size() == 2);
-        assert(energy_samples->names()[0] == "system");
-        assert(energy_samples->names()[1] == "atom");
+        auto forces_tensor = mts_data->system_adaptor->positions.grad();
 
-        auto samples_values = energy_samples->values().to(torch::kCPU);
-        auto samples = samples_values.accessor<int32_t, 2>();
+        // move results to cpu for storing
+        auto energy_detached = energy_tensor.detach().to(torch::kCPU).to(torch::kFloat64);
+        auto energy_samples = energy_block->samples();
 
-        int64_t n_atoms = atom->nlocal + atom->nghost;
-        assert(samples_values.sizes() == mts_data->selected_atoms_values.sizes());
+        // store the energy returned by the model
+        torch::Tensor global_energy;
+        if (eflag_atom) {
+            assert(energy_samples->size() == 2);
+            assert(energy_samples->names()[0] == "system");
+            assert(energy_samples->names()[1] == "atom");
 
-        auto energies = energy_detached.accessor<double, 2>();
-        for (int64_t i=0; i<energy_samples->count(); i++) {
-            assert(samples[i][0] == 0);
-            // handle potentially out of order samples in
-            // the per-atom energy tensor
-            auto atom_i = samples[i][1];
-            assert(atom_i < n_atoms);
-            eatom[atom_i] += energies[i][0];
+            auto samples_values = energy_samples->values().to(torch::kCPU);
+            auto samples = samples_values.accessor<int32_t, 2>();
+
+            int64_t n_atoms = atom->nlocal + atom->nghost;
+            assert(samples_values.sizes() == mts_data->selected_atoms_values.sizes());
+
+            auto energies = energy_detached.accessor<double, 2>();
+            for (int64_t i=0; i<energy_samples->count(); i++) {
+                assert(samples[i][0] == 0);
+                // handle potentially out of order samples in
+                // the per-atom energy tensor
+                auto atom_i = samples[i][1];
+                assert(atom_i < n_atoms);
+                eatom[atom_i] += energies[i][0];
+            }
+
+            global_energy = energy_detached.sum(0);
+            assert(energy_detached.sizes() == std::vector<int64_t>({1}));
+        } else {
+            assert(energy_samples->size() == 1);
+            assert(energy_samples->names()[0] == "system");
+
+            assert(energy_detached.sizes() == std::vector<int64_t>({1, 1}));
+            global_energy = energy_detached.reshape({1});
         }
 
-        global_energy = energy_detached.sum(0);
-        assert(energy_detached.sizes() == std::vector<int64_t>({1}));
-    } else {
-        assert(energy_samples->size() == 1);
-        assert(energy_samples->names()[0] == "system");
+        if (eflag_global) {
+            eng_vdwl += global_energy.item<double>();
+        }
 
-        assert(energy_detached.sizes() == std::vector<int64_t>({1, 1}));
-        global_energy = energy_detached.reshape({1});
-    }
+        // store forces/virial
+        assert(forces_tensor.is_cpu() && forces_tensor.scalar_type() == torch::kFloat64);
 
-    if (eflag_global) {
-        eng_vdwl += global_energy.item<double>();
-    }
+        auto forces = forces_tensor.accessor<double, 2>();
+        for (int i=0; i<atom->nlocal + atom->nghost; i++) {
+            atom->f[i][0] += forces[i][0];
+            atom->f[i][1] += forces[i][1];
+            atom->f[i][2] += forces[i][2];
+        }
 
-    // store forces/virial
-    assert(forces_tensor.is_cpu() && forces_tensor.scalar_type() == torch::kFloat64);
+        assert(!vflag_fdotr);
 
-    auto forces = forces_tensor.accessor<double, 2>();
-    for (int i=0; i<atom->nlocal + atom->nghost; i++) {
-        atom->f[i][0] += forces[i][0];
-        atom->f[i][1] += forces[i][1];
-        atom->f[i][2] += forces[i][2];
-    }
+        if (vflag_global) {
+            auto virial_tensor = mts_data->system_adaptor->strain.grad();
+            assert(virial_tensor.is_cpu() && virial_tensor.scalar_type() == torch::kFloat64);
+            auto predicted_virial = virial_tensor.accessor<double, 2>();
 
-    assert(!vflag_fdotr);
+            virial[0] += predicted_virial[0][0];
+            virial[1] += predicted_virial[1][1];
+            virial[2] += predicted_virial[2][2];
 
-    if (vflag_global) {
-        auto virial_tensor = mts_data->system_adaptor->strain.grad();
-        assert(virial_tensor.is_cpu() && virial_tensor.scalar_type() == torch::kFloat64);
-        auto predicted_virial = virial_tensor.accessor<double, 2>();
+            virial[3] += 0.5 * (predicted_virial[1][0] + predicted_virial[0][1]);
+            virial[4] += 0.5 * (predicted_virial[2][0] + predicted_virial[0][2]);
+            virial[5] += 0.5 * (predicted_virial[2][1] + predicted_virial[1][2]);
+        }
 
-        virial[0] += predicted_virial[0][0];
-        virial[1] += predicted_virial[1][1];
-        virial[2] += predicted_virial[2][2];
-
-        virial[3] += 0.5 * (predicted_virial[1][0] + predicted_virial[0][1]);
-        virial[4] += 0.5 * (predicted_virial[2][0] + predicted_virial[0][2]);
-        virial[5] += 0.5 * (predicted_virial[2][1] + predicted_virial[1][2]);
-    }
-
-    if (vflag_atom) {
-        error->all(FLERR, "per atom virial is not implemented");
+        if (vflag_atom) {
+            error->all(FLERR, "per atom virial is not implemented");
+        }
     }
 }
