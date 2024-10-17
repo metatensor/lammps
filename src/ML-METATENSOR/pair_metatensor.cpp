@@ -219,9 +219,9 @@ void PairMetatensor::settings(int argc, char ** argv) {
             if (i == argc - 1) {
                 error->all(FLERR, "expected <on/off> after 'remap_pairs' in pair_style metatensor, got nothing");
             } else if (strcmp(argv[i + 1], "on") == 0) {
-                mts_data->check_consistency = true;
+                mts_data->remap_pairs = true;
             } else if (strcmp(argv[i + 1], "off") == 0) {
-                mts_data->check_consistency = false;
+                mts_data->remap_pairs = false;
             } else {
                 error->all(FLERR, "expected <on/off> after 'remap_pairs' in pair_style metatensor, got '{}'", argv[i + 1]);
             }
