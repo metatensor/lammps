@@ -549,7 +549,7 @@ void PairMetatensorKokkos<LMPDeviceType>::compute(int eflag, int vflag) {
     // }
 
     /// Declare what we need to read from the atomKK object and what we will modify
-    atomKK->sync(ExecutionSpaceFromDevice<LMPDeviceType>::space, X_MASK | F_MASK | TAG_MASK | TYPE_MASK | ENERGY_MASK | VIRIAL_MASK);
+    this->atomKK->sync(ExecutionSpaceFromDevice<LMPDeviceType>::space, X_MASK | F_MASK | TAG_MASK | TYPE_MASK | ENERGY_MASK | VIRIAL_MASK);
     this->atomKK->modified(ExecutionSpaceFromDevice<LMPDeviceType>::space, ENERGY_MASK | F_MASK | VIRIAL_MASK);
 
     if (eflag || vflag) {
@@ -579,6 +579,7 @@ void PairMetatensorKokkos<LMPDeviceType>::compute(int eflag, int vflag) {
     );
 
     // only run the calculation for atoms actually in the current domain
+    // TODO: port to Kokkos
     mts_data->selected_atoms_values.resize_({atom->nlocal, 2});
     for (int i=0; i<atom->nlocal; i++) {
         mts_data->selected_atoms_values[i][0] = 0;

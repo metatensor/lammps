@@ -27,6 +27,9 @@
 #include "kokkos.h"
 #include "atom_kokkos.h"
 
+// #include <torch/cuda.h>
+// #include <chrono>
+
 #ifndef KOKKOS_ENABLE_CUDA
 namespace Kokkos {
 class Cuda {};
@@ -134,8 +137,7 @@ void MetatensorSystemAdaptorKokkos<LMPDeviceType>::setup_neighbors_remap(metaten
     auto cell_inv_tensor = system->cell().inverse().t().to(device).to(torch::kFloat64);
     // it might be a good idea to have this as float32 if the model is using float32
     // to speed up the computation, especially on GPU
-
-
+    
     /*-------------- whatever, this will be done on CPU for now ------------------------*/
 
     // Collect the local atom id of all local & ghosts atoms, mapping ghosts
@@ -312,6 +314,7 @@ void MetatensorSystemAdaptorKokkos<LMPDeviceType>::setup_neighbors_remap(metaten
         metatensor_torch::register_autograd_neighbors(system, neighbor_list, options_.check_consistency);
         system->add_neighbor_list(cache.options, neighbor_list);
     }
+
 }
 
 
@@ -515,7 +518,6 @@ metatensor_torch::System MetatensorSystemAdaptorKokkos<LMPDeviceType>::system_fr
     torch::ScalarType dtype,
     torch::Device device
 ) {
-    // std::cout << "MetatensorSystemAdaptorKokkos::system_from_lmp" << std::endl;
     auto total_n_atoms = atomKK->nlocal + atomKK->nghost;
 
     auto atom_types_lammps_kokkos = atomKK->k_type.view<LMPDeviceType>();
