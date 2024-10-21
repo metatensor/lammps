@@ -43,6 +43,8 @@
 
 #include "metatensor_system.h"
 
+#include "./metatensor_timer.h"
+
 using namespace LAMMPS_NS;
 
 struct LAMMPS_NS::PairMetatensorData {
@@ -61,8 +63,11 @@ struct LAMMPS_NS::PairMetatensorData {
     // should metatensor check the data LAMMPS send to the model
     // and the data the model returns?
     bool check_consistency;
+    // whether pairs should be remapped, removing pairs between ghosts if there
+    // is an equivalent pair involving at least one local atom.
+    bool remap_pairs;
     // how far away the model needs to know about neighbors
-    double interaction_range;
+    double max_cutoff;
 
     // allocation cache for the selected atoms
     torch::Tensor selected_atoms_values;
@@ -74,13 +79,11 @@ PairMetatensorData::PairMetatensorData(std::string length_unit, std::string ener
     system_adaptor(nullptr),
     device(torch::kCPU),
     check_consistency(false),
-    interaction_range(-1)
+    remap_pairs(true),
+    max_cutoff(-1)
 {
     auto options = torch::TensorOptions().dtype(torch::kInt32);
     this->selected_atoms_values = torch::zeros({0, 2}, options);
-
-    // default to true for now, this will be changed to false later
-    this->check_consistency = true;
 
     // Initialize evaluation_options
     this->evaluation_options = torch::make_intrusive<metatensor_torch::ModelEvaluationOptionsHolder>();
@@ -211,6 +214,18 @@ void PairMetatensor::settings(int argc, char ** argv) {
                 mts_data->check_consistency = false;
             } else {
                 error->all(FLERR, "expected <on/off> after 'check_consistency' in pair_style metatensor, got '{}'", argv[i + 1]);
+            }
+
+            i += 1;
+        } else if (strcmp(argv[i], "remap_pairs") == 0) {
+            if (i == argc - 1) {
+                error->all(FLERR, "expected <on/off> after 'remap_pairs' in pair_style metatensor, got nothing");
+            } else if (strcmp(argv[i + 1], "on") == 0) {
+                mts_data->remap_pairs = true;
+            } else if (strcmp(argv[i + 1], "off") == 0) {
+                mts_data->remap_pairs = false;
+            } else {
+                error->all(FLERR, "expected <on/off> after 'remap_pairs' in pair_style metatensor, got '{}'", argv[i + 1]);
             }
 
             i += 1;
@@ -369,7 +384,7 @@ void PairMetatensor::allocate() {
 }
 
 double PairMetatensor::init_one(int, int) {
-    return mts_data->interaction_range;
+    return mts_data->max_cutoff;
 }
 
 
@@ -416,15 +431,36 @@ void PairMetatensor::init_style() {
     if (range < 0) {
         error->all(FLERR, "interaction_range is negative for this model");
     } else if (!std::isfinite(range)) {
-        error->all(FLERR, "interaction_range is infinite for this model, this is not yet supported");
+        if (comm->nprocs > 1) {
+            error->all(FLERR,
+                "interaction_range is infinite for this model, "
+                "using multiple MPI domains is not supported"
+            );
+        }
+
+        // determine the maximal cutoff in the NL
+        auto requested_nl = mts_data->model->run_method("requested_neighbor_lists");
+        for (const auto& ivalue: requested_nl.toList()) {
+            auto options = ivalue.get().toCustomClass<metatensor_torch::NeighborListOptionsHolder>();
+            auto cutoff = options->engine_cutoff(mts_data->evaluation_options->length_unit());
+
+            mts_data->max_cutoff = std::max(mts_data->max_cutoff, cutoff);
+        }
     } else {
-        mts_data->interaction_range = range;
+        mts_data->max_cutoff = range;
+    }
+
+    if (!std::isfinite(mts_data->max_cutoff)) {
+        error->all(FLERR,
+            "the largest cutoff of this model is infinite, "
+            "we can't compute the corresponding neighbor list"
+        );
     }
 
     // create system adaptor
     auto options = MetatensorSystemOptions{
         this->type_mapping,
-        mts_data->interaction_range,
+        mts_data->max_cutoff,
         mts_data->check_consistency,
     };
     mts_data->system_adaptor = std::make_unique<MetatensorSystemAdaptor>(lmp, options);
@@ -433,7 +469,7 @@ void PairMetatensor::init_style() {
     // ALL pairs, even if options->full_list() is false. We will then filter
     // the pairs to only include each pair once where needed.
     auto request = neighbor->add_request(this, NeighConst::REQ_FULL | NeighConst::REQ_GHOST);
-    request->set_cutoff(mts_data->interaction_range);
+    request->set_cutoff(mts_data->max_cutoff);
 
     // Translate from the metatensor neighbor lists requests to LAMMPS neighbor
     // lists requests.
@@ -441,6 +477,7 @@ void PairMetatensor::init_style() {
     for (const auto& ivalue: requested_nl.toList()) {
         auto options = ivalue.get().toCustomClass<metatensor_torch::NeighborListOptionsHolder>();
         auto cutoff = options->engine_cutoff(mts_data->evaluation_options->length_unit());
+        assert(cutoff <= mts_data->max_cutoff);
 
         mts_data->system_adaptor->add_nl_request(cutoff, options);
     }
@@ -453,6 +490,14 @@ void PairMetatensor::init_list(int id, NeighList *ptr) {
 
 
 void PairMetatensor::compute(int eflag, int vflag) {
+    if (std::getenv("LAMMPS_METATENSOR_PROFILE") != nullptr) {
+        MetatensorTimer::enable(true);
+    } else {
+        MetatensorTimer::enable(false);
+    }
+
+    auto _ = MetatensorTimer("PairMetatensor::compute");
+
     if (eflag || vflag) {
         ev_setup(eflag, vflag);
     } else {
@@ -476,7 +521,11 @@ void PairMetatensor::compute(int eflag, int vflag) {
 
     // transform from LAMMPS to metatensor System
     auto system = mts_data->system_adaptor->system_from_lmp(
-        mts_list, static_cast<bool>(vflag_global), dtype, mts_data->device
+        mts_list,
+        static_cast<bool>(vflag_global),
+        mts_data->remap_pairs,
+        dtype,
+        mts_data->device
     );
 
     // only run the calculation for atoms actually in the current domain
@@ -492,6 +541,7 @@ void PairMetatensor::compute(int eflag, int vflag) {
 
     torch::IValue result_ivalue;
     try {
+        auto _ = MetatensorTimer("running Model::forward");
         result_ivalue = mts_data->model->forward({
             std::vector<metatensor_torch::System>{system},
             mts_data->evaluation_options,
@@ -505,79 +555,91 @@ void PairMetatensor::compute(int eflag, int vflag) {
     auto energy = result.at("energy").toCustomClass<metatensor_torch::TensorMapHolder>();
     auto energy_block = metatensor_torch::TensorMapHolder::block_by_id(energy, 0);
     auto energy_tensor = energy_block->values();
-    auto energy_detached = energy_tensor.detach().to(torch::kCPU).to(torch::kFloat64);
-    auto energy_samples = energy_block->samples();
-
-    // store the energy returned by the model
-    torch::Tensor global_energy;
-    if (eflag_atom) {
-        assert(energy_samples->size() == 2);
-        assert(energy_samples->names()[0] == "system");
-        assert(energy_samples->names()[1] == "atom");
-
-        auto samples_values = energy_samples->values().to(torch::kCPU);
-        auto samples = samples_values.accessor<int32_t, 2>();
-
-        // int64_t n_atoms = atom->nlocal + atom->nghost;
-        assert(samples_values.sizes() == mts_data->selected_atoms_values.sizes());
-
-        auto energies = energy_detached.accessor<double, 2>();
-        for (int64_t i=0; i<energy_samples->count(); i++) {
-            assert(samples[i][0] == 0);
-            // handle potentially out of order samples in
-            // the per-atom energy tensor
-            auto atom_i = samples[i][1];
-            assert(atom_i < n_atoms);
-            eatom[atom_i] += energies[i][0];
-        }
-
-        global_energy = energy_detached.sum(0);
-        assert(energy_detached.sizes() == std::vector<int64_t>({1}));
-    } else {
-        assert(energy_samples->size() == 1);
-        assert(energy_samples->names()[0] == "system");
-
-        assert(energy_detached.sizes() == std::vector<int64_t>({1, 1}));
-        global_energy = energy_detached.reshape({1});
-    }
-
-    if (eflag_global) {
-        eng_vdwl += global_energy.item<double>();
-    }
 
     // reset gradients to zero before calling backward
     mts_data->system_adaptor->positions.mutable_grad() = torch::Tensor();
     mts_data->system_adaptor->strain.mutable_grad() = torch::Tensor();
 
-    // compute forces/virial with backward propagation
-    energy_tensor.backward(-torch::ones_like(energy_tensor));
-    auto forces_tensor = mts_data->system_adaptor->positions.grad();
-    assert(forces_tensor.is_cpu() && forces_tensor.scalar_type() == torch::kFloat64);
-
-    auto forces = forces_tensor.accessor<double, 2>();
-    for (int i=0; i<atom->nlocal + atom->nghost; i++) {
-        atom->f[i][0] += forces[i][0];
-        atom->f[i][1] += forces[i][1];
-        atom->f[i][2] += forces[i][2];
+    // compute forces/virial on device with backward propagation
+    {
+        auto _ = MetatensorTimer("running Model::backward");
+        energy_tensor.backward(-torch::ones_like(energy_tensor));
     }
 
-    assert(!vflag_fdotr);
+    {
+        auto _ = MetatensorTimer("storing model output in LAMMPS data structures");
 
-    if (vflag_global) {
-        auto virial_tensor = mts_data->system_adaptor->strain.grad();
-        assert(virial_tensor.is_cpu() && virial_tensor.scalar_type() == torch::kFloat64);
-        auto predicted_virial = virial_tensor.accessor<double, 2>();
+        auto forces_tensor = mts_data->system_adaptor->positions.grad();
 
-        virial[0] += predicted_virial[0][0];
-        virial[1] += predicted_virial[1][1];
-        virial[2] += predicted_virial[2][2];
+        // move results to cpu for storing
+        auto energy_detached = energy_tensor.detach().to(torch::kCPU).to(torch::kFloat64);
+        auto energy_samples = energy_block->samples();
 
-        virial[3] += 0.5 * (predicted_virial[1][0] + predicted_virial[0][1]);
-        virial[4] += 0.5 * (predicted_virial[2][0] + predicted_virial[0][2]);
-        virial[5] += 0.5 * (predicted_virial[2][1] + predicted_virial[1][2]);
-    }
+        // store the energy returned by the model
+        torch::Tensor global_energy;
+        if (eflag_atom) {
+            assert(energy_samples->size() == 2);
+            assert(energy_samples->names()[0] == "system");
+            assert(energy_samples->names()[1] == "atom");
 
-    if (vflag_atom) {
-        error->all(FLERR, "per atom virial is not implemented");
+            auto samples_values = energy_samples->values().to(torch::kCPU);
+            auto samples = samples_values.accessor<int32_t, 2>();
+
+            int64_t n_atoms = atom->nlocal + atom->nghost;
+            assert(samples_values.sizes() == mts_data->selected_atoms_values.sizes());
+
+            auto energies = energy_detached.accessor<double, 2>();
+            for (int64_t i=0; i<energy_samples->count(); i++) {
+                assert(samples[i][0] == 0);
+                // handle potentially out of order samples in
+                // the per-atom energy tensor
+                auto atom_i = samples[i][1];
+                assert(atom_i < n_atoms);
+                eatom[atom_i] += energies[i][0];
+            }
+
+            global_energy = energy_detached.sum(0);
+            assert(energy_detached.sizes() == std::vector<int64_t>({1}));
+        } else {
+            assert(energy_samples->size() == 1);
+            assert(energy_samples->names()[0] == "system");
+
+            assert(energy_detached.sizes() == std::vector<int64_t>({1, 1}));
+            global_energy = energy_detached.reshape({1});
+        }
+
+        if (eflag_global) {
+            eng_vdwl += global_energy.item<double>();
+        }
+
+        // store forces/virial
+        assert(forces_tensor.is_cpu() && forces_tensor.scalar_type() == torch::kFloat64);
+
+        auto forces = forces_tensor.accessor<double, 2>();
+        for (int i=0; i<atom->nlocal + atom->nghost; i++) {
+            atom->f[i][0] += forces[i][0];
+            atom->f[i][1] += forces[i][1];
+            atom->f[i][2] += forces[i][2];
+        }
+
+        assert(!vflag_fdotr);
+
+        if (vflag_global) {
+            auto virial_tensor = mts_data->system_adaptor->strain.grad();
+            assert(virial_tensor.is_cpu() && virial_tensor.scalar_type() == torch::kFloat64);
+            auto predicted_virial = virial_tensor.accessor<double, 2>();
+
+            virial[0] += predicted_virial[0][0];
+            virial[1] += predicted_virial[1][1];
+            virial[2] += predicted_virial[2][2];
+
+            virial[3] += 0.5 * (predicted_virial[1][0] + predicted_virial[0][1]);
+            virial[4] += 0.5 * (predicted_virial[2][0] + predicted_virial[0][2]);
+            virial[5] += 0.5 * (predicted_virial[2][1] + predicted_virial[1][2]);
+        }
+
+        if (vflag_atom) {
+            error->all(FLERR, "per atom virial is not implemented");
+        }
     }
 }

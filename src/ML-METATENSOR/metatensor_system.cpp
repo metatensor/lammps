@@ -22,6 +22,8 @@
 
 #include "neigh_list.h"
 
+#include "./metatensor_timer.h"
+
 using namespace LAMMPS_NS;
 
 MetatensorSystemAdaptor::MetatensorSystemAdaptor(LAMMPS *lmp, MetatensorSystemOptions options):
@@ -90,7 +92,8 @@ static std::array<int32_t, 3> cell_shifts(
 }
 
 
-void MetatensorSystemAdaptor::setup_neighbors(metatensor_torch::System& system, NeighList *list) {
+void MetatensorSystemAdaptor::setup_neighbors_remap(metatensor_torch::System& system, NeighList *list) {
+    auto _ = MetatensorTimer("converting neighbors with ghosts remapping");
     auto dtype = system->positions().scalar_type();
     auto device = system->positions().device();
 
@@ -105,154 +108,293 @@ void MetatensorSystemAdaptor::setup_neighbors(metatensor_torch::System& system, 
         {{cell_inv_accessor[2][0], cell_inv_accessor[2][1], cell_inv_accessor[2][2]}},
     }};
 
-    // Collect the local atom id of all local & ghosts atoms, mapping ghosts
-    // atoms which are periodic images of local atoms back to the local atoms.
-    //
-    // Metatensor expects pairs corresponding to periodic atoms to be between
-    // the main atoms, but using the actual distance vector between the atom and
-    // the ghost.
-    original_atom_id_.clear();
-    original_atom_id_.reserve(total_n_atoms);
+    {
+        auto _ = MetatensorTimer("identifying ghosts and real atoms");
 
-    // identify all local atom by their LAMMPS atom tag.
-    local_atoms_tags_.clear();
-    for (int i=0; i<atom->nlocal; i++) {
-        original_atom_id_.emplace_back(i);
-        local_atoms_tags_.emplace(atom->tag[i], i);
-    }
+        // Collect the local atom id of all local & ghosts atoms, mapping ghosts
+        // atoms which are periodic images of local atoms back to the local atoms.
+        //
+        // Metatensor expects pairs corresponding to periodic atoms to be between
+        // the main atoms, but using the actual distance vector between the atom and
+        // the ghost.
+        original_atom_id_.clear();
+        original_atom_id_.reserve(total_n_atoms);
 
-    // now loop over ghosts & map them back to the main cell if needed
-    ghost_atoms_tags_.clear();
-    for (int i=atom->nlocal; i<total_n_atoms; i++) {
-        auto tag = atom->tag[i];
-        auto it = local_atoms_tags_.find(tag);
-        if (it != local_atoms_tags_.end()) {
-            // this is the periodic image of an atom already owned by this domain
-            original_atom_id_.emplace_back(it->second);
-        } else {
-            // this can either be a periodic image of an atom owned by another
-            // domain, or directly an atom from another domain. Since we can not
-            // really distinguish between these, we take the first atom as the
-            // "main" one and remap all atoms with the same tag to the first one
-            auto it = ghost_atoms_tags_.find(tag);
-            if (it != ghost_atoms_tags_.end()) {
-                // we already found this atom elsewhere in the system
+        // identify all local atom by their LAMMPS atom tag.
+        local_atoms_tags_.clear();
+        for (int i=0; i<atom->nlocal; i++) {
+            original_atom_id_.emplace_back(i);
+            local_atoms_tags_.emplace(atom->tag[i], i);
+        }
+
+        // now loop over ghosts & map them back to the main cell if needed
+        ghost_atoms_tags_.clear();
+        for (int i=atom->nlocal; i<total_n_atoms; i++) {
+            auto tag = atom->tag[i];
+            auto it = local_atoms_tags_.find(tag);
+            if (it != local_atoms_tags_.end()) {
+                // this is the periodic image of an atom already owned by this domain
                 original_atom_id_.emplace_back(it->second);
             } else {
-                // this is the first time we are seeing this atom
-                original_atom_id_.emplace_back(i);
-                ghost_atoms_tags_.emplace(tag, i);
+                // this can either be a periodic image of an atom owned by another
+                // domain, or directly an atom from another domain. Since we can not
+                // really distinguish between these, we take the first atom as the
+                // "main" one and remap all atoms with the same tag to the first one
+                auto it = ghost_atoms_tags_.find(tag);
+                if (it != ghost_atoms_tags_.end()) {
+                    // we already found this atom elsewhere in the system
+                    original_atom_id_.emplace_back(it->second);
+                } else {
+                    // this is the first time we are seeing this atom
+                    original_atom_id_.emplace_back(i);
+                    ghost_atoms_tags_.emplace(tag, i);
+                }
             }
         }
     }
 
     for (auto& cache: caches_) {
-        auto cutoff2 = cache.cutoff * cache.cutoff;
-        auto full_list = cache.options->full_list();
+        {
+            auto _ = MetatensorTimer("filtering LAMMPS neighbor list");
 
-        // convert from LAMMPS neighbors list to metatensor format
-        cache.known_samples.clear();
-        cache.samples.clear();
-        cache.distances_f32.clear();
-        cache.distances_f64.clear();
-        for (int ii=0; ii<(list->inum + list->gnum); ii++) {
-            auto atom_i = list->ilist[ii];
-            auto original_atom_i = original_atom_id_[atom_i];
+            auto cutoff2 = cache.cutoff * cache.cutoff;
+            auto full_list = cache.options->full_list();
 
-            auto neighbors = list->firstneigh[ii];
-            for (int jj=0; jj<list->numneigh[ii]; jj++) {
-                auto atom_j = neighbors[jj];
-                auto original_atom_j = original_atom_id_[atom_j];
+            // convert from LAMMPS neighbors list to metatensor format
+            cache.known_samples.clear();
+            cache.samples.clear();
+            cache.distances_f32.clear();
+            cache.distances_f64.clear();
+            for (int ii=0; ii<(list->inum + list->gnum); ii++) {
+                auto atom_i = list->ilist[ii];
+                assert(atom_i < total_n_atoms);
+                auto original_atom_i = original_atom_id_[atom_i];
 
-                if (!full_list && original_atom_i > original_atom_j) {
-                    // Remove extra pairs if the model requested half-lists
-                    continue;
-                }
+                auto neighbors = list->firstneigh[ii];
+                for (int jj=0; jj<list->numneigh[ii]; jj++) {
+                    auto atom_j = neighbors[jj] & NEIGHMASK;
+                    assert(atom_j < total_n_atoms);
+                    auto original_atom_j = original_atom_id_[atom_j];
 
-                auto distance = std::array<double, 3>{
-                    x[atom_j][0] - x[atom_i][0],
-                    x[atom_j][1] - x[atom_i][1],
-                    x[atom_j][2] - x[atom_i][2],
-                };
+                    if (!full_list && original_atom_i > original_atom_j) {
+                        // Remove extra pairs if the model requested half-lists
+                        continue;
+                    }
 
-                auto distance2 = (
-                    distance[0] * distance[0] +
-                    distance[1] * distance[1] +
-                    distance[2] * distance[2]
-                );
-                if (distance2 > cutoff2) {
-                    // LAMMPS neighbors list contains some pairs after the
-                    // cutoff, we filter them here
-                    continue;
-                }
+                    auto distance = std::array<double, 3>{
+                        x[atom_j][0] - x[atom_i][0],
+                        x[atom_j][1] - x[atom_i][1],
+                        x[atom_j][2] - x[atom_i][2],
+                    };
 
-                // Compute the cell shift for the pair.
-                auto shift_i = std::array<double, 3>{
-                    x[atom_i][0] - x[original_atom_i][0],
-                    x[atom_i][1] - x[original_atom_i][1],
-                    x[atom_i][2] - x[original_atom_i][2],
-                };
-                auto shift_j = std::array<double, 3>{
-                    x[atom_j][0] - x[original_atom_j][0],
-                    x[atom_j][1] - x[original_atom_j][1],
-                    x[atom_j][2] - x[original_atom_j][2],
-                };
-                auto pair_shift = std::array<double, 3>{
-                    shift_j[0] - shift_i[0],
-                    shift_j[1] - shift_i[1],
-                    shift_j[2] - shift_i[2],
-                };
+                    auto distance2 = (
+                        distance[0] * distance[0] +
+                        distance[1] * distance[1] +
+                        distance[2] * distance[2]
+                    );
+                    if (distance2 > cutoff2) {
+                        // LAMMPS neighbors list contains some pairs after the
+                        // cutoff, we filter them here
+                        continue;
+                    }
 
-                auto shift = std::array<int32_t, 3>{0, 0, 0};
-                if (pair_shift[0] != 0 || pair_shift[1] != 0 || pair_shift[2] != 0) {
-                    shift = cell_shifts(cell_inv, pair_shift);
+                    // Compute the cell shift for the pair.
+                    auto shift_i = std::array<double, 3>{
+                        x[atom_i][0] - x[original_atom_i][0],
+                        x[atom_i][1] - x[original_atom_i][1],
+                        x[atom_i][2] - x[original_atom_i][2],
+                    };
+                    auto shift_j = std::array<double, 3>{
+                        x[atom_j][0] - x[original_atom_j][0],
+                        x[atom_j][1] - x[original_atom_j][1],
+                        x[atom_j][2] - x[original_atom_j][2],
+                    };
+                    auto pair_shift = std::array<double, 3>{
+                        shift_j[0] - shift_i[0],
+                        shift_j[1] - shift_i[1],
+                        shift_j[2] - shift_i[2],
+                    };
 
-                    if (!full_list && original_atom_i == original_atom_j) {
-                        // If a half neighbors list has been requested, do
-                        // not include the same pair between an atom and
-                        // it's periodic image twice with opposite cell
-                        // shifts (e.g. [1, -1, 1] and [-1, 1, -1]).
-                        //
-                        // Instead we pick pairs in the positive plan of
-                        // shifts.
-                        if (shift[0] + shift[1] + shift[2] < 0) {
-                            // drop shifts on the negative half-space
-                            continue;
+                    auto shift = std::array<int32_t, 3>{0, 0, 0};
+                    if (pair_shift[0] != 0 || pair_shift[1] != 0 || pair_shift[2] != 0) {
+                        shift = cell_shifts(cell_inv, pair_shift);
+
+                        if (!full_list && original_atom_i == original_atom_j) {
+                            // If a half neighbors list has been requested, do
+                            // not include the same pair between an atom and
+                            // it's periodic image twice with opposite cell
+                            // shifts (e.g. [1, -1, 1] and [-1, 1, -1]).
+                            //
+                            // Instead we pick pairs in the positive plan of
+                            // shifts.
+                            if (shift[0] + shift[1] + shift[2] < 0) {
+                                // drop shifts on the negative half-space
+                                continue;
+                            }
+
+                            if ((shift[0] + shift[1] + shift[2] == 0)
+                                && (shift[2] < 0 || (shift[2] == 0 && shift[1] < 0))) {
+                                // drop shifts in the negative half plane or the
+                                // negative shift[1] axis.
+                                //
+                                // See below for a graphical representation: we are
+                                // keeping the shifts indicated with `O` and
+                                // dropping the ones indicated with `X`
+                                //
+                                //  O O O │ O O O
+                                //  O O O │ O O O
+                                //  O O O │ O O O
+                                // ─X─X─X─┼─O─O─O─
+                                //  X X X │ X X X
+                                //  X X X │ X X X
+                                //  X X X │ X X X
+                                continue;
+                            }
                         }
+                    }
 
-                        if ((shift[0] + shift[1] + shift[2] == 0)
-                            && (shift[2] < 0 || (shift[2] == 0 && shift[1] < 0))) {
-                            // drop shifts in the negative half plane or the
-                            // negative shift[1] axis.
-                            //
-                            // See below for a graphical representation: we are
-                            // keeping the shifts indicated with `O` and
-                            // dropping the ones indicated with `X`
-                            //
-                            //  O O O │ O O O
-                            //  O O O │ O O O
-                            //  O O O │ O O O
-                            // ─X─X─X─┼─O─O─O─
-                            //  X X X │ X X X
-                            //  X X X │ X X X
-                            //  X X X │ X X X
-                            continue;
+                    auto sample = std::array<int32_t, 5>{
+                        original_atom_i,
+                        original_atom_j,
+                        shift[0],
+                        shift[1],
+                        shift[2],
+                    };
+
+                    // only add the pair if it is not already known. The same pair
+                    // can occur multiple time between two periodic ghosts shifted
+                    // around by the same amount, but we only want one of these pairs.
+                    if (cache.known_samples.insert(sample).second) {
+                        cache.samples.push_back(sample);
+
+                        if (dtype == torch::kFloat64) {
+                            cache.distances_f64.push_back(distance);
+                        } else if (dtype == torch::kFloat32) {
+                            cache.distances_f32.push_back({
+                                static_cast<float>(distance[0]),
+                                static_cast<float>(distance[1]),
+                                static_cast<float>(distance[2])
+                            });
+                        } else {
+                            // should be unreachable
+                            error->all(FLERR, "invalid dtype, this is a bug");
                         }
                     }
                 }
+            }
+        }
 
-                auto sample = std::array<int32_t, 5>{
-                    original_atom_i,
-                    original_atom_j,
-                    shift[0],
-                    shift[1],
-                    shift[2],
-                };
+        int64_t n_pairs = cache.samples.size();
+        auto samples_values = torch::from_blob(
+            reinterpret_cast<int32_t*>(cache.samples.data()),
+            {n_pairs, 5},
+            torch::TensorOptions().dtype(torch::kInt32).device(torch::kCPU)
+        );
 
-                // only add the pair if it is not already known. The same pair
-                // can occur multiple time between two periodic ghosts shifted
-                // around by the same amount, but we only want one of these pairs.
-                if (cache.known_samples.insert(sample).second) {
+        torch::intrusive_ptr<metatensor_torch::LabelsHolder> samples;
+        {
+            auto _ = MetatensorTimer("creating samples Labels (" +  std::to_string(n_pairs) +" pairs)");
+            samples = torch::make_intrusive<metatensor_torch::LabelsHolder>(
+                std::vector<std::string>{"first_atom", "second_atom", "cell_shift_a", "cell_shift_b", "cell_shift_c"},
+                samples_values
+            );
+        }
+
+        auto distances_vectors = torch::Tensor();
+        if (dtype == torch::kFloat64) {
+            distances_vectors = torch::from_blob(
+                cache.distances_f64.data(),
+                {n_pairs, 3, 1},
+                torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU)
+            );
+        } else if (dtype == torch::kFloat32) {
+            distances_vectors = torch::from_blob(
+                cache.distances_f32.data(),
+                {n_pairs, 3, 1},
+                torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCPU)
+            );
+        } else {
+            // should be unreachable
+            error->all(FLERR, "invalid dtype, this is a bug");
+        }
+
+        {
+            auto _ = MetatensorTimer("moving neighbor data to dtype/device");
+            distances_vectors = distances_vectors.to(dtype).to(device);
+            samples = samples->to(device);
+        }
+
+        torch::intrusive_ptr<metatensor_torch::TensorBlockHolder> neighbors;
+        {
+            auto _ = MetatensorTimer("creating neighbors TensorBlock");
+            neighbors = torch::make_intrusive<metatensor_torch::TensorBlockHolder>(
+                distances_vectors,
+                samples,
+                std::vector<metatensor_torch::TorchLabels>{
+                    metatensor_torch::LabelsHolder::create({"xyz"}, {{0}, {1}, {2}})->to(device),
+                },
+                metatensor_torch::LabelsHolder::create({"distance"}, {{0}})->to(device)
+            );
+        }
+
+        metatensor_torch::register_autograd_neighbors(system, neighbors, options_.check_consistency);
+        system->add_neighbor_list(cache.options, neighbors);
+    }
+}
+
+void MetatensorSystemAdaptor::setup_neighbors_no_remap(metatensor_torch::System& system, NeighList *list) {
+    auto _ = MetatensorTimer("converting neighbors without ghosts remapping");
+
+    auto dtype = system->positions().scalar_type();
+    auto device = system->positions().device();
+
+    double** x = atom->x;
+    auto total_n_atoms = atom->nlocal + atom->nghost;
+
+    for (auto& cache: caches_) {
+        {
+            auto _ = MetatensorTimer("filtering LAMMPS neighbor list");
+
+            auto cutoff2 = cache.cutoff * cache.cutoff;
+            auto full_list = cache.options->full_list();
+
+            // convert from LAMMPS neighbors list to metatensor format
+            cache.known_samples.clear();
+            cache.samples.clear();
+            cache.distances_f32.clear();
+            cache.distances_f64.clear();
+            for (int ii=0; ii<(list->inum + list->gnum); ii++) {
+                auto atom_i = list->ilist[ii];
+
+                auto neighbors = list->firstneigh[ii];
+                for (int jj=0; jj<list->numneigh[ii]; jj++) {
+                    auto atom_j = neighbors[jj];
+
+                    if (!full_list && atom_i > atom_j) {
+                        // Remove extra pairs if the model requested half-lists
+                        continue;
+                    }
+
+                    auto distance = std::array<double, 3>{
+                        x[atom_j][0] - x[atom_i][0],
+                        x[atom_j][1] - x[atom_i][1],
+                        x[atom_j][2] - x[atom_i][2],
+                    };
+
+                    auto distance2 = (
+                        distance[0] * distance[0] +
+                        distance[1] * distance[1] +
+                        distance[2] * distance[2]
+                    );
+                    if (distance2 > cutoff2) {
+                        // LAMMPS neighbors list contains some pairs after the
+                        // cutoff, we filter them here
+                        continue;
+                    }
+
+                    auto sample = std::array<int32_t, 5>{atom_i, atom_j, 0, 0, 0};
+
+
                     cache.samples.push_back(sample);
 
                     if (dtype == torch::kFloat64) {
@@ -278,10 +420,14 @@ void MetatensorSystemAdaptor::setup_neighbors(metatensor_torch::System& system, 
             torch::TensorOptions().dtype(torch::kInt32).device(torch::kCPU)
         );
 
-        auto samples = torch::make_intrusive<metatensor_torch::LabelsHolder>(
-            std::vector<std::string>{"first_atom", "second_atom", "cell_shift_a", "cell_shift_b", "cell_shift_c"},
-            samples_values
-        );
+        torch::intrusive_ptr<metatensor_torch::LabelsHolder> samples;
+        {
+            auto _ = MetatensorTimer("creating samples Labels (" +  std::to_string(n_pairs) +" pairs)");
+            samples = torch::make_intrusive<metatensor_torch::LabelsHolder>(
+                std::vector<std::string>{"first_atom", "second_atom", "cell_shift_a", "cell_shift_b", "cell_shift_c"},
+                samples_values
+            );
+        }
 
         auto distances_vectors = torch::Tensor();
         if (dtype == torch::kFloat64) {
@@ -301,14 +447,24 @@ void MetatensorSystemAdaptor::setup_neighbors(metatensor_torch::System& system, 
             error->all(FLERR, "invalid dtype, this is a bug");
         }
 
-        auto neighbors = torch::make_intrusive<metatensor_torch::TensorBlockHolder>(
-            distances_vectors.to(dtype).to(device),
-            samples->to(device),
-            std::vector<metatensor_torch::TorchLabels>{
-                metatensor_torch::LabelsHolder::create({"xyz"}, {{0}, {1}, {2}})->to(device),
-            },
-            metatensor_torch::LabelsHolder::create({"distance"}, {{0}})->to(device)
-        );
+        {
+            auto _ = MetatensorTimer("moving neighbor data to dtype/device");
+            distances_vectors = distances_vectors.to(dtype).to(device);
+            samples = samples->to(device);
+        }
+
+        torch::intrusive_ptr<metatensor_torch::TensorBlockHolder> neighbors;
+        {
+            auto _ = MetatensorTimer("creating neighbors TensorBlock");
+            neighbors = torch::make_intrusive<metatensor_torch::TensorBlockHolder>(
+                distances_vectors,
+                samples,
+                std::vector<metatensor_torch::TorchLabels>{
+                    metatensor_torch::LabelsHolder::create({"xyz"}, {{0}, {1}, {2}})->to(device),
+                },
+                metatensor_torch::LabelsHolder::create({"distance"}, {{0}})->to(device)
+            );
+        }
 
         metatensor_torch::register_autograd_neighbors(system, neighbors, options_.check_consistency);
         system->add_neighbor_list(cache.options, neighbors);
@@ -319,9 +475,12 @@ void MetatensorSystemAdaptor::setup_neighbors(metatensor_torch::System& system, 
 metatensor_torch::System MetatensorSystemAdaptor::system_from_lmp(
     NeighList* list,
     bool do_virial,
+    bool remap_pairs,
     torch::ScalarType dtype,
     torch::Device device
 ) {
+    auto _ = MetatensorTimer("creating System from LAMMPS data");
+
     double** x = atom->x;
     auto total_n_atoms = atom->nlocal + atom->nghost;
 
@@ -367,6 +526,11 @@ metatensor_torch::System MetatensorSystemAdaptor::system_from_lmp(
         cell
     );
 
-    this->setup_neighbors(system, list);
+    if (remap_pairs) {
+        this->setup_neighbors_remap(system, list);
+    } else {
+        this->setup_neighbors_no_remap(system, list);
+    }
+
     return system;
 }

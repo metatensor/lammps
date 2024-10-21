@@ -71,8 +71,11 @@ struct LAMMPS_NS::PairMetatensorDataKokkos {
     // should metatensor check the data LAMMPS send to the model
     // and the data the model returns?
     bool check_consistency;
+    // whether pairs should be remapped, removing pairs between ghosts if there
+    // is an equivalent pair involving at least one local atom.
+    bool remap_pairs;
     // how far away the model needs to know about neighbors
-    double interaction_range;
+    double max_cutoff;
 
     // allocation cache for the selected atoms
     torch::Tensor selected_atoms_values;
@@ -84,7 +87,8 @@ PairMetatensorDataKokkos::PairMetatensorDataKokkos(std::string length_unit, std:
     system_adaptor(nullptr),
     device(torch::kCPU),
     check_consistency(false),
-    interaction_range(-1)
+    remap_pairs(true),
+    max_cutoff(-1)
 {
     auto options = torch::TensorOptions().dtype(torch::kInt32);
     this->selected_atoms_values = torch::zeros({0, 2}, options);
@@ -220,6 +224,18 @@ void PairMetatensorKokkos<LMPDeviceType>::settings(int argc, char ** argv) {
                 mts_data->check_consistency = false;
             } else {
                 error->all(FLERR, "expected <on/off> after 'check_consistency' in pair_style metatensor, got '{}'", argv[i + 1]);
+            }
+
+            i += 1;
+        } else if (strcmp(argv[i], "remap_pairs") == 0) {
+            if (i == argc - 1) {
+                error->all(FLERR, "expected <on/off> after 'remap_pairs' in pair_style metatensor, got nothing");
+            } else if (strcmp(argv[i + 1], "on") == 0) {
+                mts_data->remap_pairs = true;
+            } else if (strcmp(argv[i + 1], "off") == 0) {
+                mts_data->remap_pairs = false;
+            } else {
+                error->all(FLERR, "expected <on/off> after 'remap_pairs' in pair_style metatensor, got '{}'", argv[i + 1]);
             }
 
             i += 1;
@@ -402,7 +418,7 @@ void PairMetatensorKokkos<LMPDeviceType>::allocate() {
 template<class LMPDeviceType>
 double PairMetatensorKokkos<LMPDeviceType>::init_one(int, int) {
     std::cout << "init_one" << std::endl;
-    return mts_data->interaction_range;
+    return mts_data->max_cutoff;
 }
 
 
@@ -454,9 +470,30 @@ void PairMetatensorKokkos<LMPDeviceType>::init_style() {
     if (range < 0) {
         error->all(FLERR, "interaction_range is negative for this model");
     } else if (!std::isfinite(range)) {
-        error->all(FLERR, "interaction_range is infinite for this model, this is not yet supported");
+        if (comm->nprocs > 1) {
+            error->all(FLERR,
+                "interaction_range is infinite for this model, "
+                "using multiple MPI domains is not supported"
+            );
+        }
+
+        // determine the maximal cutoff in the NL
+        auto requested_nl = mts_data->model->run_method("requested_neighbor_lists");
+        for (const auto& ivalue: requested_nl.toList()) {
+            auto options = ivalue.get().toCustomClass<metatensor_torch::NeighborListOptionsHolder>();
+            auto cutoff = options->engine_cutoff(mts_data->evaluation_options->length_unit());
+
+            mts_data->max_cutoff = std::max(mts_data->max_cutoff, cutoff);
+        }
     } else {
-        mts_data->interaction_range = range;
+        mts_data->max_cutoff = range;
+    }
+
+    if (!std::isfinite(mts_data->max_cutoff)) {
+        error->all(FLERR,
+            "the largest cutoff of this model is infinite, "
+            "we can't compute the corresponding neighbor list"
+        );
     }
 
     /// create Kokkos view for type_mapping
@@ -472,7 +509,7 @@ void PairMetatensorKokkos<LMPDeviceType>::init_style() {
     auto options = MetatensorSystemOptionsKokkos<LMPDeviceType>{
         this->type_mapping,
         type_mapping_kokkos,
-        mts_data->interaction_range,
+        mts_data->max_cutoff,
         mts_data->check_consistency,
     };
     mts_data->system_adaptor = std::make_unique<MetatensorSystemAdaptorKokkos<LMPDeviceType>>(lmp, this, options);
@@ -483,6 +520,7 @@ void PairMetatensorKokkos<LMPDeviceType>::init_style() {
     for (const auto& ivalue: requested_nl.toList()) {
         auto options = ivalue.get().toCustomClass<metatensor_torch::NeighborListOptionsHolder>();
         auto cutoff = options->engine_cutoff(mts_data->evaluation_options->length_unit());
+        assert(cutoff <= mts_data->max_cutoff);
 
         mts_data->system_adaptor->add_nl_request(cutoff, options);
     }
@@ -537,7 +575,7 @@ void PairMetatensorKokkos<LMPDeviceType>::compute(int eflag, int vflag) {
 
     // transform from LAMMPS to metatensor System
     auto system = mts_data->system_adaptor->system_from_lmp(
-        static_cast<bool>(vflag_global), dtype, mts_data->device
+        static_cast<bool>(vflag_global), mts_data->remap_pairs, dtype, mts_data->device
     );
 
     // only run the calculation for atoms actually in the current domain

@@ -45,20 +45,20 @@ include(FetchContent)
 
 set(URL_BASE "https://github.com/lab-cosmo/metatensor/releases/download")
 
-set(METATENSOR_CORE_VERSION "0.1.8")
+set(METATENSOR_CORE_VERSION "0.1.10")
 FetchContent_Declare(metatensor
     URL ${URL_BASE}/metatensor-core-v${METATENSOR_CORE_VERSION}/metatensor-core-cxx-${METATENSOR_CORE_VERSION}.tar.gz
-    URL_HASH SHA1=3ed389770e5ec6dbb8cbc9ed88f84d6809b552ef
+    URL_HASH SHA1=e89495c7ce425831257f66f0084ffb28caefc516
 )
 
 message(STATUS "Fetching metatensor v${METATENSOR_CORE_VERSION} from github")
 FetchContent_MakeAvailable(metatensor)
 
 
-set(METATENSOR_TORCH_VERSION "0.5.2")
+set(METATENSOR_TORCH_VERSION "0.5.5")
 FetchContent_Declare(metatensor-torch
     URL ${URL_BASE}/metatensor-torch-v${METATENSOR_TORCH_VERSION}/metatensor-torch-cxx-${METATENSOR_TORCH_VERSION}.tar.gz
-    URL_HASH SHA1=0144f8fb8a0f67124ce3ee69bc5cda183e431df3
+    URL_HASH SHA1=ad0c6ad5c8ea364b0b85fd96fd656822fd1b1443
 )
 
 message(STATUS "Fetching metatensor-torch v${METATENSOR_TORCH_VERSION} from github")

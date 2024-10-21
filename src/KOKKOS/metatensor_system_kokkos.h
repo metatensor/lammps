@@ -93,7 +93,12 @@ public:
     void add_nl_request(double cutoff, metatensor_torch::NeighborListOptions request);
 
     // Create a metatensor system matching the LAMMPS system data
-    metatensor_torch::System system_from_lmp(bool do_virial, torch::ScalarType dtype, torch::Device device);
+    metatensor_torch::System system_from_lmp(
+        bool do_virial,
+        bool remap_pairs,
+        torch::ScalarType dtype, 
+        torch::Device device
+    );
 
     // Explicit strain for virial calculations. This uses the same dtype/device
     // as LAMMPS data (positions, …)
@@ -103,8 +108,15 @@ public:
     torch::Tensor positions;
 
 private:
-    // setup the metatensor neighbors list from the internal LAMMPS one
-    void setup_neighbors(metatensor_torch::System& system);
+    // setup the metatensor neighbors list from the internal LAMMPS one,
+    // remapping periodic ghosts to the corresponding local atom
+    void setup_neighbors_remap(metatensor_torch::System& system);
+
+    // setup the metatensor neighbors list from the internal LAMMPS one,
+    // WITHOUT remapping periodic ghosts to the corresponding local atom.
+    //
+    // This produces a larger NL but skips the cost of the remapping
+    void setup_neighbors_no_remap(metatensor_torch::System& system);
 
     // options for this system adaptor
     MetatensorSystemOptionsKokkos<LMPDeviceType> options_;
