@@ -127,14 +127,13 @@ void MetatensorSystemAdaptorKokkos<LMPDeviceType>::add_nl_request(double cutoff,
 
 template<class LMPDeviceType>
 void MetatensorSystemAdaptorKokkos<LMPDeviceType>::setup_neighbors_remap(metatensor_torch::System& system) {
-    // std::cout << "MetatensorSystemAdaptorKokkos::setup_neighbors" << std::endl;
     auto dtype = system->positions().scalar_type();
     auto device = system->positions().device();
 
     auto positions_kokkos = this->atomKK->k_x. template view<LMPDeviceType>();
     auto total_n_atoms = atomKK->nlocal + atomKK->nghost;
 
-    auto cell_inv_tensor = system->cell().inverse().t().to(device).to(torch::kFloat64);
+    auto cell_inv_tensor = system->cell().inverse().t().to(device).to(dtype);
     // it might be a good idea to have this as float32 if the model is using float32
     // to speed up the computation, especially on GPU
     
@@ -232,7 +231,7 @@ void MetatensorSystemAdaptorKokkos<LMPDeviceType>::setup_neighbors_remap(metaten
         positions_kokkos.data(),
         {total_n_atoms, 3},
         torch::TensorOptions().dtype(torch::kFloat64).device(device)
-    );
+    ).to(dtype);
 
     for (auto& cache: caches_) {
         // half list mask, if necessary (TODO: change names! This could modify the tensors outside the loop if more than one NL!)
@@ -320,14 +319,13 @@ void MetatensorSystemAdaptorKokkos<LMPDeviceType>::setup_neighbors_remap(metaten
 
 template<class LMPDeviceType>
 void MetatensorSystemAdaptorKokkos<LMPDeviceType>::setup_neighbors_no_remap(metatensor_torch::System& system) {
-    // std::cout << "MetatensorSystemAdaptorKokkos::setup_neighbors" << std::endl;
     auto dtype = system->positions().scalar_type();
     auto device = system->positions().device();
 
     auto positions_kokkos = this->atomKK->k_x. template view<LMPDeviceType>();
     auto total_n_atoms = atomKK->nlocal + atomKK->nghost;
 
-    auto cell_inv_tensor = system->cell().inverse().t().to(device).to(torch::kFloat64);
+    auto cell_inv_tensor = system->cell().inverse().t().to(device).to(dtype);
     // it might be a good idea to have this as float32 if the model is using float32
     // to speed up the computation, especially on GPU
 
@@ -426,7 +424,7 @@ void MetatensorSystemAdaptorKokkos<LMPDeviceType>::setup_neighbors_no_remap(meta
         positions_kokkos.data(),
         {total_n_atoms, 3},
         torch::TensorOptions().dtype(torch::kFloat64).device(device)
-    );
+    ).to(dtype);
 
     for (auto& cache: caches_) {
         // half list mask, if necessary (TODO: change names! This could modify the tensors outside the loop if more than one NL!)
@@ -538,17 +536,17 @@ metatensor_torch::System MetatensorSystemAdaptorKokkos<LMPDeviceType>::system_fr
         torch::TensorOptions().dtype(torch::kInt32).device(device)
     ).clone();  /// Again, allocation alert. Not sure if this can be avoided
 
-    auto tensor_options = torch::TensorOptions().dtype(torch::kFloat64).device(device);
-
     // atom->x contains "real" and then ghost atoms, in that order
     auto positions_kokkos = atomKK->k_x.view<LMPDeviceType>();
+    auto tensor_options_positions = torch::TensorOptions().dtype(torch::kFloat64).device(device);
     this->positions = torch::from_blob(
         positions_kokkos.data(), {total_n_atoms, 3},
         // requires_grad=true since we always need gradients w.r.t. positions
-        tensor_options
+        tensor_options_positions
     ).clone().requires_grad_(true);  /// Allocation alert (clone)
 
-    auto cell = torch::zeros({3, 3}, tensor_options);  /// Allocation alert, we could make it a class member and allocate it once
+    auto tensor_options_cell = torch::TensorOptions().dtype(dtype).device(device);
+    auto cell = torch::zeros({3, 3}, tensor_options_cell);  /// Allocation alert, we could make it a class member and allocate it once
     /// domain doesn't seem to have a Kokkos version
     cell[0][0] = domain->xprd;
 
@@ -560,7 +558,7 @@ metatensor_torch::System MetatensorSystemAdaptorKokkos<LMPDeviceType>::system_fr
     cell[2][2] = domain->zprd;
     /// And the other elements? Are they always zero?
 
-    auto system_positions = this->positions;
+    auto system_positions = this->positions.to(dtype);
     cell = cell.to(dtype).to(device);   /// to(device) alert. How do we find the cell on Kokkos?
 
     if (do_virial) {
