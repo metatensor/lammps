@@ -47,6 +47,8 @@
 
 #include "metatensor_system_kokkos.h"
 
+#include <chrono>
+
 #ifndef KOKKOS_ENABLE_CUDA
 namespace Kokkos {
 class Cuda {};
@@ -77,8 +79,6 @@ struct LAMMPS_NS::PairMetatensorDataKokkos {
     // how far away the model needs to know about neighbors
     double max_cutoff;
 
-    // allocation cache for the selected atoms
-    torch::Tensor selected_atoms_values;
     // adaptor from LAMMPS system to metatensor's
     std::unique_ptr<MetatensorSystemAdaptorKokkos<LMPDeviceType>> system_adaptor;
 };
@@ -90,9 +90,6 @@ PairMetatensorDataKokkos::PairMetatensorDataKokkos(std::string length_unit, std:
     remap_pairs(true),
     max_cutoff(-1)
 {
-    auto options = torch::TensorOptions().dtype(torch::kInt32);
-    this->selected_atoms_values = torch::zeros({0, 2}, options);
-
     // default to true for now, this will be changed to false later
     this->check_consistency = true;
 
@@ -205,8 +202,6 @@ PairMetatensorKokkos<LMPDeviceType>::~PairMetatensorKokkos() {
 // called when finding `pair_style metatensor` in the input
 template<class LMPDeviceType>
 void PairMetatensorKokkos<LMPDeviceType>::settings(int argc, char ** argv) {
-    std::cout << "settings" << std::endl;
-
     if (argc == 0) {
         error->all(FLERR, "expected at least 1 argument to pair_style metatensor, got {}", argc);
     }
@@ -370,8 +365,6 @@ void PairMetatensorKokkos<LMPDeviceType>::settings(int argc, char ** argv) {
 
 template<class LMPDeviceType>
 void PairMetatensorKokkos<LMPDeviceType>::allocate() {
-    std::cout << "allocate" << std::endl;
-
     allocated = 1;
 
     // setflags stores whether the coeff for a given pair of atom types are known
@@ -417,7 +410,6 @@ void PairMetatensorKokkos<LMPDeviceType>::allocate() {
 
 template<class LMPDeviceType>
 double PairMetatensorKokkos<LMPDeviceType>::init_one(int, int) {
-    std::cout << "init_one" << std::endl;
     return mts_data->max_cutoff;
 }
 
@@ -425,7 +417,6 @@ double PairMetatensorKokkos<LMPDeviceType>::init_one(int, int) {
 // called on pair_coeff
 template<class LMPDeviceType>
 void PairMetatensorKokkos<LMPDeviceType>::coeff(int argc, char ** argv) {
-    std::cout << "coeff" << std::endl;
     if (argc < 3 || strcmp(argv[0], "*") != 0 || strcmp(argv[1], "*") != 0) {
         error->all(FLERR, "invalid pair_coeff, expected `pair_coeff * * <list of types>`");
     }
@@ -455,7 +446,6 @@ void PairMetatensorKokkos<LMPDeviceType>::coeff(int argc, char ** argv) {
 // called when the run starts
 template<class LMPDeviceType>
 void PairMetatensorKokkos<LMPDeviceType>::init_style() {
-    std::cout << "init_style" << std::endl;
     // Require newton pair on since we need to communicate forces accumulated on
     // ghost atoms to neighboring domains. These forces contributions come from
     // gradient of a local descriptor w.r.t. domain ghosts (periodic images
@@ -529,14 +519,15 @@ void PairMetatensorKokkos<LMPDeviceType>::init_style() {
 
 template<class LMPDeviceType>
 void PairMetatensorKokkos<LMPDeviceType>::init_list(int id, NeighList *ptr) {
-    std::cout << "init_list" << std::endl;
     mts_data->system_adaptor->init_list(id, ptr);
-    std::cout << "init_list done" << std::endl;
 }
 
 
 template<class LMPDeviceType>
 void PairMetatensorKokkos<LMPDeviceType>::compute(int eflag, int vflag) {
+    // auto start = std::chrono::high_resolution_clock::now();
+    // auto end = std::chrono::high_resolution_clock::now();
+
     // auto x = atomKK->k_x.view<LMPDeviceType>();
     // auto h_array = Kokkos::create_mirror_view(d_array);
     // Kokkos::deep_copy(h_array, d_array);
@@ -573,24 +564,35 @@ void PairMetatensorKokkos<LMPDeviceType>::compute(int eflag, int vflag) {
         error->all(FLERR, "the model requested an unsupported dtype '{}'", mts_data->capabilities->dtype());
     }
 
+    // torch::cuda::synchronize();
+    // start = std::chrono::high_resolution_clock::now();
+
     // transform from LAMMPS to metatensor System
     auto system = mts_data->system_adaptor->system_from_lmp(
         static_cast<bool>(vflag_global), mts_data->remap_pairs, dtype, mts_data->device
     );
 
+    // torch::cuda::synchronize();
+    // end = std::chrono::high_resolution_clock::now();
+    // std::cout << "sys-from-lmp: " << std::chrono::duration_cast<std::chrono::microseconds>(end - start).count() / 1000.0 << " ms" << std::endl;
+
     // only run the calculation for atoms actually in the current domain
-    // TODO: port to Kokkos
-    mts_data->selected_atoms_values.resize_({atom->nlocal, 2});
-    for (int i=0; i<atom->nlocal; i++) {
-        mts_data->selected_atoms_values[i][0] = 0;
-        mts_data->selected_atoms_values[i][1] = i;
-    }
+    auto tensor_options = torch::TensorOptions().dtype(torch::kInt32).device(mts_data->device);
+    torch::Tensor selected_atoms_values = torch::stack({
+        torch::zeros({atom->nlocal}, tensor_options),
+        torch::arange(atom->nlocal, tensor_options)
+    }, -1);
+
     auto selected_atoms = torch::make_intrusive<metatensor_torch::LabelsHolder>(
-        std::vector<std::string>{"system", "atom"}, mts_data->selected_atoms_values
+        std::vector<std::string>{"system", "atom"}, selected_atoms_values
     );
-    mts_data->evaluation_options->set_selected_atoms(selected_atoms->to(mts_data->device));
+    mts_data->evaluation_options->set_selected_atoms(selected_atoms);
 
     torch::IValue result_ivalue;
+
+    // torch::cuda::synchronize();
+    // start = std::chrono::high_resolution_clock::now();
+
     try {
         result_ivalue = mts_data->model->forward({
             std::vector<metatensor_torch::System>{system},
@@ -600,6 +602,10 @@ void PairMetatensorKokkos<LMPDeviceType>::compute(int eflag, int vflag) {
     } catch (const std::exception& e) {
         error->all(FLERR, "error evaluating the torch model: {}", e.what());
     }
+
+    // torch::cuda::synchronize();
+    // end = std::chrono::high_resolution_clock::now();
+    // std::cout << "Time taken forward: " << std::chrono::duration_cast<std::chrono::microseconds>(end - start).count() / 1000.0 << " ms" << std::endl;
 
     auto result = result_ivalue.toGenericDict();
     auto energy = result.at("energy").toCustomClass<metatensor_torch::TensorMapHolder>();
@@ -631,7 +637,16 @@ void PairMetatensorKokkos<LMPDeviceType>::compute(int eflag, int vflag) {
     mts_data->system_adaptor->strain.mutable_grad() = torch::Tensor();
 
     // compute forces/virial with backward propagation
+
+    // torch::cuda::synchronize();
+    // start = std::chrono::high_resolution_clock::now();
+
     energy_tensor.backward(-torch::ones_like(energy_tensor));
+
+    // torch::cuda::synchronize();
+    // end = std::chrono::high_resolution_clock::now();
+    // std::cout << "Time taken backward: " << std::chrono::duration_cast<std::chrono::microseconds>(end - start).count() / 1000.0 << " ms" << std::endl;
+
     auto forces_tensor = mts_data->system_adaptor->positions.grad();
     assert(forces_tensor.scalar_type() == torch::kFloat64);
 

@@ -27,8 +27,8 @@
 #include "kokkos.h"
 #include "atom_kokkos.h"
 
-// #include <torch/cuda.h>
-// #include <chrono>
+#include <torch/cuda.h>
+#include <chrono>
 
 #ifndef KOKKOS_ENABLE_CUDA
 namespace Kokkos {
@@ -61,6 +61,8 @@ MetatensorSystemAdaptorKokkos<LMPDeviceType>::MetatensorSystemAdaptorKokkos(LAMM
     auto request = neighbor->add_request(requestor, NeighConst::REQ_FULL | NeighConst::REQ_GHOST);
     request->set_id(0);
     request->set_cutoff(options_.interaction_range);
+    request->set_kokkos_host(0);
+    request->set_kokkos_device(1);
 
     this->strain = torch::eye(3, torch::TensorOptions().dtype(torch::kFloat64).device(device).requires_grad(true));
 }
@@ -127,6 +129,12 @@ void MetatensorSystemAdaptorKokkos<LMPDeviceType>::add_nl_request(double cutoff,
 
 template<class LMPDeviceType>
 void MetatensorSystemAdaptorKokkos<LMPDeviceType>::setup_neighbors_remap(metatensor_torch::System& system) {
+    // auto start = std::chrono::high_resolution_clock::now();
+    // auto end = std::chrono::high_resolution_clock::now();
+
+    // torch::cuda::synchronize();
+    // start = std::chrono::high_resolution_clock::now();
+
     auto dtype = system->positions().scalar_type();
     auto device = system->positions().device();
 
@@ -134,8 +142,6 @@ void MetatensorSystemAdaptorKokkos<LMPDeviceType>::setup_neighbors_remap(metaten
     auto total_n_atoms = atomKK->nlocal + atomKK->nghost;
 
     auto cell_inv_tensor = system->cell().inverse().t().to(device).to(dtype);
-    // it might be a good idea to have this as float32 if the model is using float32
-    // to speed up the computation, especially on GPU
     
     /*-------------- whatever, this will be done on CPU for now ------------------------*/
 
@@ -188,39 +194,64 @@ void MetatensorSystemAdaptorKokkos<LMPDeviceType>::setup_neighbors_remap(metaten
     );
     original_atom_id_tensor = original_atom_id_tensor.to(device);  // RIP
 
-    // Accumulate total number of pairs
-    int total_number_of_pairs = 0;
-    for (int ii=0; ii<(list_->inum + list_->gnum); ii++) {
-        total_number_of_pairs += list_->numneigh[ii];
-    }
-    std::vector<int> centers(total_number_of_pairs);
-    std::vector<int> neighbors(total_number_of_pairs);
+    // torch::cuda::synchronize();
+    // end = std::chrono::high_resolution_clock::now();
+    // std::cout << "  CPU packaging and GPU transfer (1st part): " << std::chrono::duration_cast<std::chrono::microseconds>(end - start).count() / 1000.0 << "ms" << std::endl;
 
-    // Fill the centers and neighbors arrays with the original atom ids
-    int pair_index = 0;
-    for (int ii=0; ii<(list_->inum + list_->gnum); ii++) {
-        auto atom_i = list_->ilist[ii];
-        auto neighbors_ii = list_->firstneigh[ii];
-        for (int jj=0; jj<list_->numneigh[ii]; jj++) {
-            centers[pair_index] = atom_i;
-            neighbors[pair_index] = neighbors_ii[jj] & NEIGHMASK;
-            pair_index++;
-        }
-    }
+    // torch::cuda::synchronize();
+    // start = std::chrono::high_resolution_clock::now();
 
-    // Create torch tensors for the centers and neighbors arrays
-    auto centers_tensor = torch::from_blob(
-        centers.data(),
-        {total_number_of_pairs},
-        torch::TensorOptions().dtype(torch::kInt32).device(torch::kCPU)
+
+    NeighListKokkos<LMPDeviceType>* list_kk = static_cast<NeighListKokkos<LMPDeviceType>*>(this->list_);
+
+    auto numneigh_kk = list_kk->d_numneigh;
+    auto neighbors_kk = list_kk->d_neighbors;
+    auto ilist_kk = list_kk->d_ilist;
+
+    auto max_number_of_neighbors = list_kk->maxneighs;
+
+    // mask neighbors_kk with NEIGHMASK. We take this opportunity to set the
+    // layout of this view to LayoutRight, which we need to feed the pointer to torch
+    Kokkos::View<int**, Kokkos::LayoutRight, LMPDeviceType> neighbors_kk_masked("neighbors_kk_masked", total_n_atoms, max_number_of_neighbors);
+    Kokkos::parallel_for("mask_neigh", total_n_atoms*max_number_of_neighbors, KOKKOS_LAMBDA(int i) {
+        auto local_i = i / max_number_of_neighbors;
+        auto local_j = i % max_number_of_neighbors;
+        neighbors_kk_masked(local_i, local_j) = neighbors_kk(local_i, local_j) & NEIGHMASK;
+    });
+
+    auto numneigh_torch = torch::from_blob(
+        numneigh_kk.data(),
+        {total_n_atoms},
+        torch::TensorOptions().dtype(torch::kInt32).device(device)
     );
-    centers_tensor = centers_tensor.to(device);
-    auto neighbors_tensor = torch::from_blob(
-        neighbors.data(),
-        {total_number_of_pairs},
-        torch::TensorOptions().dtype(torch::kInt32).device(torch::kCPU)
+
+    auto neighbors_torch = torch::from_blob(
+        neighbors_kk_masked.data(),
+        {total_n_atoms, max_number_of_neighbors},
+        torch::TensorOptions().dtype(torch::kInt32).device(device)
     );
-    neighbors_tensor = neighbors_tensor.to(device);
+
+    auto ilist_torch = torch::from_blob(
+        ilist_kk.data(),
+        {total_n_atoms},
+        torch::TensorOptions().dtype(torch::kInt32).device(device)
+    );
+
+    auto expanded_arange = torch::arange(max_number_of_neighbors, torch::TensorOptions().dtype(torch::kInt32).device(device)).unsqueeze(0).expand({total_n_atoms, -1});
+    auto neighbor_2d_mask = expanded_arange < numneigh_torch.unsqueeze(1);
+
+    auto expanded_arange_other_dim = torch::arange(total_n_atoms, torch::TensorOptions().dtype(torch::kInt32).device(device)).unsqueeze(1).expand({-1, max_number_of_neighbors});
+    auto index_for_ilist = expanded_arange_other_dim.masked_select(neighbor_2d_mask);
+    auto centers_tensor = ilist_torch.index_select(0, index_for_ilist);
+
+    auto neighbors_tensor = neighbors_torch.masked_select(neighbor_2d_mask);
+
+    // torch::cuda::synchronize();
+    // end = std::chrono::high_resolution_clock::now();
+    // std::cout << "  CPU packaging and GPU transfer (2nd part): " << std::chrono::duration_cast<std::chrono::microseconds>(end - start).count() / 1000.0 << "ms" << std::endl;
+
+    // torch::cuda::synchronize();
+    // start = std::chrono::high_resolution_clock::now();
 
     // change centers and neighbors to the original atom ids
     auto centers_tensor_original_id = original_atom_id_tensor.index_select(0, centers_tensor);
@@ -296,13 +327,24 @@ void MetatensorSystemAdaptorKokkos<LMPDeviceType>::setup_neighbors_remap(metaten
         auto sample_indices = torch::empty(samples_values_unique.size(0), samples_inverse.options());
         sample_indices.scatter_(0, samples_inverse, permutation);
 
+        // torch::cuda::synchronize();
+        // end = std::chrono::high_resolution_clock::now();
+        // std::cout << "  filtering out stuff: " << std::chrono::duration_cast<std::chrono::microseconds>(end - start).count() / 1000.0 << "ms" << std::endl;
+
+        // torch::cuda::synchronize();
+        // start = std::chrono::high_resolution_clock::now();
+
         auto samples = torch::make_intrusive<metatensor_torch::LabelsHolder>(
             std::vector<std::string>{"first_atom", "second_atom", "cell_shift_a", "cell_shift_b", "cell_shift_c"},
             samples_values_unique
         );
 
+        // torch::cuda::synchronize();
+        // end = std::chrono::high_resolution_clock::now();
+        // std::cout << "  Time to create big labels: " << std::chrono::duration_cast<std::chrono::microseconds>(end - start).count() / 1000.0 << "ms" << std::endl;
+
         auto neighbor_list = torch::make_intrusive<metatensor_torch::TensorBlockHolder>(
-            interatomic_vectors_filtered.index_select(0, sample_indices).unsqueeze(-1).to(dtype).to(device),
+            interatomic_vectors_filtered.index_select(0, sample_indices).unsqueeze(-1),
             samples->to(device),
             std::vector<metatensor_torch::TorchLabels>{
                 metatensor_torch::LabelsHolder::create({"xyz"}, {{0}, {1}, {2}})->to(device),

@@ -107,7 +107,10 @@ public:
     // conversion) to access its gradient
     torch::Tensor positions;
 
-private:
+
+    // These two are not private otherwise Kokkos can't see the lambdas
+    // defined inside them
+
     // setup the metatensor neighbors list from the internal LAMMPS one,
     // remapping periodic ghosts to the corresponding local atom
     void setup_neighbors_remap(metatensor_torch::System& system);
@@ -118,6 +121,7 @@ private:
     // This produces a larger NL but skips the cost of the remapping
     void setup_neighbors_no_remap(metatensor_torch::System& system);
 
+private:
     // options for this system adaptor
     MetatensorSystemOptionsKokkos<LMPDeviceType> options_;
 
