@@ -359,6 +359,9 @@ void PairMetatensorKokkos<LMPDeviceType>::settings(int argc, char ** argv) {
         allocate();
     }
 
+    // this will allow us to receive the NL in a GPU-friendly format
+    this->lmp->kokkos->neigh_transpose = 1;
+
     std::cout << "Running on " << typeid(ExecutionSpaceFromDevice<LMPDeviceType>::space).name() << std::endl;
 }
 

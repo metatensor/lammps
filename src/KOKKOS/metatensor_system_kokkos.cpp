@@ -132,18 +132,20 @@ void MetatensorSystemAdaptorKokkos<LMPDeviceType>::setup_neighbors_remap(metaten
     // auto start = std::chrono::high_resolution_clock::now();
     // auto end = std::chrono::high_resolution_clock::now();
 
-    // torch::cuda::synchronize();
-    // start = std::chrono::high_resolution_clock::now();
-
     auto dtype = system->positions().scalar_type();
     auto device = system->positions().device();
 
     auto positions_kokkos = this->atomKK->k_x. template view<LMPDeviceType>();
     auto total_n_atoms = atomKK->nlocal + atomKK->nghost;
 
-    auto cell_inv_tensor = system->cell().inverse().t().to(device).to(dtype);
+    // torch::cuda::synchronize();
+    // start = std::chrono::high_resolution_clock::now();
     
     /*-------------- whatever, this will be done on CPU for now ------------------------*/
+    // The cost of this section seems to be very low
+
+    // There is no kokkos cell in LAMMPS, so we need to transfer
+    auto cell_inv_tensor = system->cell().inverse().t().to(device).to(dtype);
 
     // Collect the local atom id of all local & ghosts atoms, mapping ghosts
     // atoms which are periodic images of local atoms back to the local atoms.
@@ -185,7 +187,6 @@ void MetatensorSystemAdaptorKokkos<LMPDeviceType>::setup_neighbors_remap(metaten
             }
         }
     }
-    /*----------- end of whatever, this will be done on CPU for now --------------*/
 
     auto original_atom_id_tensor = torch::from_blob(
         original_atom_id_.data(),
@@ -196,22 +197,22 @@ void MetatensorSystemAdaptorKokkos<LMPDeviceType>::setup_neighbors_remap(metaten
 
     // torch::cuda::synchronize();
     // end = std::chrono::high_resolution_clock::now();
-    // std::cout << "  CPU packaging and GPU transfer (1st part): " << std::chrono::duration_cast<std::chrono::microseconds>(end - start).count() / 1000.0 << "ms" << std::endl;
+    // std::cout << "  ghost mapping (CPU): " << std::chrono::duration_cast<std::chrono::microseconds>(end - start).count() / 1000.0 << "ms" << std::endl;
+
+    /*----------- end of whatever, this will be done on CPU for now --------------*/
 
     // torch::cuda::synchronize();
     // start = std::chrono::high_resolution_clock::now();
 
-
     NeighListKokkos<LMPDeviceType>* list_kk = static_cast<NeighListKokkos<LMPDeviceType>*>(this->list_);
 
     auto numneigh_kk = list_kk->d_numneigh;
-    auto neighbors_kk = list_kk->d_neighbors;
+    auto neighbors_kk = list_kk->d_neighbors_transpose;
     auto ilist_kk = list_kk->d_ilist;
 
     auto max_number_of_neighbors = list_kk->maxneighs;
 
-    // mask neighbors_kk with NEIGHMASK. We take this opportunity to set the
-    // layout of this view to LayoutRight, which we need to feed the pointer to torch
+    // mask neighbors_kk with NEIGHMASK
     Kokkos::View<int**, Kokkos::LayoutRight, LMPDeviceType> neighbors_kk_masked("neighbors_kk_masked", total_n_atoms, max_number_of_neighbors);
     Kokkos::parallel_for("mask_neigh", total_n_atoms*max_number_of_neighbors, KOKKOS_LAMBDA(int i) {
         auto local_i = i / max_number_of_neighbors;
@@ -248,7 +249,7 @@ void MetatensorSystemAdaptorKokkos<LMPDeviceType>::setup_neighbors_remap(metaten
 
     // torch::cuda::synchronize();
     // end = std::chrono::high_resolution_clock::now();
-    // std::cout << "  CPU packaging and GPU transfer (2nd part): " << std::chrono::duration_cast<std::chrono::microseconds>(end - start).count() / 1000.0 << "ms" << std::endl;
+    // std::cout << "  NL format conversion: " << std::chrono::duration_cast<std::chrono::microseconds>(end - start).count() / 1000.0 << "ms" << std::endl;
 
     // torch::cuda::synchronize();
     // start = std::chrono::high_resolution_clock::now();
@@ -329,7 +330,7 @@ void MetatensorSystemAdaptorKokkos<LMPDeviceType>::setup_neighbors_remap(metaten
 
         // torch::cuda::synchronize();
         // end = std::chrono::high_resolution_clock::now();
-        // std::cout << "  filtering out stuff: " << std::chrono::duration_cast<std::chrono::microseconds>(end - start).count() / 1000.0 << "ms" << std::endl;
+        // std::cout << "  NL filtering: " << std::chrono::duration_cast<std::chrono::microseconds>(end - start).count() / 1000.0 << "ms" << std::endl;
 
         // torch::cuda::synchronize();
         // start = std::chrono::high_resolution_clock::now();
