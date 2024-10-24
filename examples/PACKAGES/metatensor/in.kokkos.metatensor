@@ -1,19 +1,20 @@
 units metal
 boundary p p p
 
-atom_style atomic
+atom_style atomic/kk
 lattice fcc 3.6
 region box block 0 8 0 8 0 8
 create_box 1 box
 create_atoms 1 box
 
-labelmap atom 1 Ni
-mass Ni 58.693
+# labelmap atom 1 Ni  # lammps-kokkos doesn't like this
+mass 1 58.693
 
 velocity all create 123 42
 
-pair_style metatensor nickel-lj.pt device cuda remap_pairs off
-# pair_style metatensor nickel-lj-extensions.pt extensions collected-extensions/
+run_style verlet/kk
+
+pair_style metatensor/kk nickel-lj.pt device cuda check_consistency off
 pair_coeff * * 28
 
 timestep 0.001

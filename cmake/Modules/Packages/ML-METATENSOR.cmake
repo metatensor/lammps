@@ -4,14 +4,14 @@ if(CMAKE_CXX_STANDARD LESS 17)
 be set to at least C++17")
 endif()
 
-if (BUILD_OMP AND APPLE)
-    message(FATAL_ERROR
-        "Can not enable both BUILD_OMP and PGK_ML-METATENSOR on Apple systems, "
-        "since this results in two different versions of libiomp5.dylib (one "
-        "from the system and one from Torch) being linked to the final "
-        "executable, which then segfaults"
-    )
-endif()
+# if (BUILD_OMP AND APPLE)
+#     message(FATAL_ERROR
+#         "Can not enable both BUILD_OMP and PGK_ML-METATENSOR on Apple systems, "
+#         "since this results in two different versions of libiomp5.dylib (one "
+#         "from the system and one from Torch) being linked to the final "
+#         "executable, which then segfaults"
+#     )
+# endif()
 
 # Bring the `torch` target in scope to allow evaluation
 # of cmake generator expression from `metatensor_torch`
