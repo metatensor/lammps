@@ -19,21 +19,21 @@ PairStyle(metatensor/kk, PairMetatensorKokkos<LMPDeviceType>);
 #ifndef LMP_PAIR_METATENSOR_KOKKOS_H
 #define LMP_PAIR_METATENSOR_KOKKOS_H
 
-#include "kokkos_base.h"
 #include "pair_kokkos.h"
 
 namespace LAMMPS_NS {
 
-template<class LMPDeviceType>
+template<class DeviceType>
 class MetatensorSystemAdaptorKokkos;
 
+template<class DeviceType>
 struct PairMetatensorDataKokkos;
 
 /// I noticed that most other kokkos packages inherit from their non-kokkos
 /// counterparts. It doesn't look like a good idea to me because
 /// they end up overriding everything... Not doing it here for now.
-template<class LMPDeviceType>
-class PairMetatensorKokkos : public Pair, public KokkosBase {
+template<class DeviceType>
+class PairMetatensorKokkos : public Pair {
 public:
     PairMetatensorKokkos(class LAMMPS *);
     ~PairMetatensorKokkos();
@@ -47,7 +47,7 @@ public:
 
     void allocate();
 private:
-    PairMetatensorDataKokkos* mts_data;
+    PairMetatensorDataKokkos<DeviceType>* mts_data;
 
     // mapping from LAMMPS types to metatensor types
     int32_t* type_mapping;

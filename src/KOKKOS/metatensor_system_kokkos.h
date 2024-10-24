@@ -28,11 +28,11 @@
 
 namespace LAMMPS_NS {
 
-template<class LMPDeviceType>
+template<class DeviceType>
 struct MetatensorSystemOptionsKokkos {
     // Mapping from LAMMPS types to metatensor types
     const int32_t* types_mapping;
-    const Kokkos::View<int32_t*, Kokkos::LayoutRight, LMPDeviceType> types_mapping_kokkos;
+    const Kokkos::View<int32_t*, Kokkos::LayoutRight, DeviceType> types_mapping_kokkos;
     // interaction range of the model, in LAMMPS units
     double interaction_range;
     // should we run extra checks on the neighbor lists?
@@ -40,7 +40,7 @@ struct MetatensorSystemOptionsKokkos {
 };
 
 // data for metatensor neighbors lists
-template<class LMPDeviceType>
+template<class DeviceType>
 struct MetatensorNeighborsDataKokkos {
     // single neighbors sample containing [i, j, S_a, S_b, S_c]
     using sample_t = std::array<int32_t, 5>;
@@ -79,11 +79,11 @@ struct MetatensorNeighborsDataKokkos {
     std::vector<std::array<float, 3>> distances_f32;
 };
 
-template<class LMPDeviceType>
+template<class DeviceType>
 class MetatensorSystemAdaptorKokkos : public Pointers {
 public:
-    MetatensorSystemAdaptorKokkos(LAMMPS* lmp, Pair* requestor, MetatensorSystemOptionsKokkos<LMPDeviceType> options);
-    MetatensorSystemAdaptorKokkos(LAMMPS* lmp, Compute* requestor, MetatensorSystemOptionsKokkos<LMPDeviceType> options);
+    MetatensorSystemAdaptorKokkos(LAMMPS* lmp, Pair* requestor, MetatensorSystemOptionsKokkos<DeviceType> options);
+    MetatensorSystemAdaptorKokkos(LAMMPS* lmp, Compute* requestor, MetatensorSystemOptionsKokkos<DeviceType> options);
 
     ~MetatensorSystemAdaptorKokkos();
 
@@ -123,13 +123,13 @@ public:
 
 private:
     // options for this system adaptor
-    MetatensorSystemOptionsKokkos<LMPDeviceType> options_;
+    MetatensorSystemOptionsKokkos<DeviceType> options_;
 
     // LAMMPS NL
     NeighList* list_;
     // allocations caches for all the NL requested by
     // the model
-    std::vector<MetatensorNeighborsDataKokkos<LMPDeviceType>> caches_;
+    std::vector<MetatensorNeighborsDataKokkos<DeviceType>> caches_;
     // allocation cache for the atomic types in the system
     torch::Tensor atomic_types_;
     // allocation cache holding the "original atom" id for all atoms in the
