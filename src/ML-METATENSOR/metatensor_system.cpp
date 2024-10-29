@@ -520,10 +520,35 @@ metatensor_torch::System MetatensorSystemAdaptor::system_from_lmp(
         cell = cell.matmul(model_strain);
     }
 
+    // Periodic boundary conditions handling.
+    // While Metatensor atomistic models can support mixed PBC settings, we
+    // currently assume that the system is fully periodic and we throw an error
+    // otherwise
+    if (!domain->xperiodic || !domain->yperiodic || !domain->zperiodic) {
+        error->all(FLERR, "pair_metatensor requires a fully periodic system");
+    }
+    auto pbc = torch::tensor(
+        {domain->xperiodic, domain->yperiodic, domain->zperiodic},
+        torch::TensorOptions().dtype(torch::kBool).device(device)
+    );
+
+    // Note that something like this:
+    //     cell.index_put_(
+    //         {torch::logical_not(pbc)},
+    //         torch::tensor({0.0}, torch::TensorOptions().dtype(dtype).device(device))
+    //     );
+    //
+    // would allow creating System with non-periodic directions, but we're using
+    // the inverse of the cell matrix to filter the neighbor list, and the cell
+    // matrix becomes singular if any of its rows are zero. This requires some
+    // changes in the neighbor list filtering code to handle non-periodic
+    // directions.
+
     auto system = torch::make_intrusive<metatensor_torch::SystemHolder>(
         atomic_types_.to(device),
         system_positions,
-        cell
+        cell,
+        pbc
     );
 
     if (remap_pairs) {
