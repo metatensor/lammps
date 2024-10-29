@@ -55,10 +55,10 @@ message(STATUS "Fetching metatensor v${METATENSOR_CORE_VERSION} from github")
 FetchContent_MakeAvailable(metatensor)
 
 
-set(METATENSOR_TORCH_VERSION "0.5.5")
+set(METATENSOR_TORCH_VERSION "0.6.1")
 FetchContent_Declare(metatensor-torch
     URL ${URL_BASE}/metatensor-torch-v${METATENSOR_TORCH_VERSION}/metatensor-torch-cxx-${METATENSOR_TORCH_VERSION}.tar.gz
-    URL_HASH SHA1=ad0c6ad5c8ea364b0b85fd96fd656822fd1b1443
+    URL_HASH SHA1=0a25e00c0dc5842ecebb9be6c1590b44f598df70
 )
 
 message(STATUS "Fetching metatensor-torch v${METATENSOR_TORCH_VERSION} from github")
