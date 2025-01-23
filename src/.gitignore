@@ -95,6 +95,8 @@
 /angle_lepton.h
 /dihedral_lepton.cpp
 /dihedral_lepton.h
+/fix_efield_lepton.cpp
+/fix_efield_lepton.h
 /fix_wall_lepton.cpp
 /fix_wall_lepton.h
 /lepton_utils.cpp
@@ -192,6 +194,8 @@
 /colvarproxy_lammps_version.h
 /fix_colvars.cpp
 /fix_colvars.h
+/inthash.cpp
+/inthash.h
 /fix_plumed.cpp
 /fix_plumed.h
 /dump_molfile.cpp
@@ -244,6 +248,9 @@
 /pair_mdpd_rhosum.h
 /pair_tdpd.cpp
 /pair_tdpd.h
+
+/*rheo*.cpp
+/*rheo*.h
 
 /compute_grid.cpp
 /compute_grid.h
@@ -434,6 +441,8 @@
 /pair_coul_cut_global.h
 /pair_coul_streitz.cpp
 /pair_coul_streitz.h
+/pair_coul_ctip.cpp
+/pair_coul_ctip.h
 /pair_gauss.cpp
 /pair_gauss.h
 /pair_lj96_cut.cpp
@@ -500,6 +509,8 @@
 /angle_harmonic.h
 /angle_mm3.cpp
 /angle_mm3.h
+/angle_mwlc.cpp
+/angle_mwlc.h
 /angle_quartic.cpp
 /angle_quartic.h
 /angle_spica.cpp
@@ -790,6 +801,8 @@
 /fix_acks2_reaxff.h
 /fix_adapt_fep.cpp
 /fix_adapt_fep.h
+/fix_add_heat.cpp
+/fix_add_heat.h
 /fix_addtorque.cpp
 /fix_addtorque.h
 /fix_append_atoms.cpp
@@ -971,12 +984,16 @@
 /fix_pour.h
 /fix_qeq_comb.cpp
 /fix_qeq_comb.h
+/fix_qeq_ctip.cpp
+/fix_qeq_ctip.h
 /fix_qeq_fire.cpp
 /fix_qeq_fire.h
 /fix_qeq_reaxff.cpp
 /fix_qeq_reaxff.h
 /fix_qmmm.cpp
 /fix_qmmm.h
+/fix_qtpie_reaxff.cpp
+/fix_qtpie_reaxff.h
 /fix_reaxff.cpp
 /fix_reaxff.h
 /fix_reaxff_bonds.cpp
@@ -1070,13 +1087,15 @@
 /fix_wall_srd.h
 /fix_widom.cpp
 /fix_widom.h
+/geturl.cpp
+/geturl.h
 /gpu_extra.h
-/group_ndx.cpp
-/group_ndx.h
+/group2ndx.cpp
+/group2ndx.h
 /gz_file_writer.cpp
 /gz_file_writer.h
-/ndx_group.cpp
-/ndx_group.h
+/ndx2group.cpp
+/ndx2group.h
 /hyper.cpp
 /hyper.h
 /improper_class2.cpp
@@ -1202,6 +1221,9 @@
 /pair_dipole_cut.h
 /pair_dipole_sf.cpp
 /pair_dipole_sf.h
+/d3_parameters.h
+/pair_dispersion_d3.h
+/pair_dispersion_d3.cpp
 /pair_dsmc.cpp
 /pair_dsmc.h
 /pair_e3b.cpp

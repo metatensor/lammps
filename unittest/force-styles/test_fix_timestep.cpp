@@ -71,7 +71,7 @@ LAMMPS *init_lammps(LAMMPS::argv &args, const TestConfig &cfg, const bool use_re
     // check if prerequisite styles are available
     Info *info = new Info(lmp);
     int nfail  = 0;
-    for (auto &prerequisite : cfg.prerequisites) {
+    for (const auto &prerequisite : cfg.prerequisites) {
         std::string style = prerequisite.second;
 
         // this is a test for fix styles, so if the suffixed
@@ -97,7 +97,7 @@ LAMMPS *init_lammps(LAMMPS::argv &args, const TestConfig &cfg, const bool use_re
     };
 
     command("variable input_dir index " + INPUT_FOLDER);
-    for (auto &pre_command : cfg.pre_commands)
+    for (const auto &pre_command : cfg.pre_commands)
         command(pre_command);
 
     std::string input_file = platform::path_join(INPUT_FOLDER, cfg.input_file);
@@ -128,7 +128,7 @@ LAMMPS *init_lammps(LAMMPS::argv &args, const TestConfig &cfg, const bool use_re
     command("group solute  molecule 1:2");
     command("group solvent molecule 3:5");
 
-    for (auto &post_command : cfg.post_commands)
+    for (const auto &post_command : cfg.post_commands)
         command(post_command);
 
     command("timestep 0.25");
@@ -158,10 +158,10 @@ void restart_lammps(LAMMPS *lmp, const TestConfig &cfg, bool use_rmass, bool use
 
     if (use_respa) command("run_style respa 2 1 bond 1 pair 2");
 
-    for (auto &post_command : cfg.post_commands)
+    for (const auto &post_command : cfg.post_commands)
         command(post_command);
 
-    auto ifix = lmp->modify->get_fix_by_id("test");
+    auto *ifix = lmp->modify->get_fix_by_id("test");
     if (ifix && !utils::strmatch(ifix->style, "^move")) {
         // must be set to trigger calling Fix::reset_dt() with timestep
         lmp->update->first_update = 1;
@@ -198,16 +198,16 @@ void generate_yaml_file(const char *outfile, const TestConfig &config)
     // natoms
     writer.emit("natoms", natoms);
 
-    auto ifix = lmp->modify->get_fix_by_id("test");
+    auto *ifix = lmp->modify->get_fix_by_id("test");
     if (!ifix) {
         std::cerr << "ERROR: no fix defined with fix ID 'test'\n";
         exit(1);
     } else {
         // run_stress, if enabled
         if (ifix->thermo_virial) {
-            auto stress = ifix->virial;
-            block       = fmt::format("{:23.16e} {:23.16e} {:23.16e} {:23.16e} {:23.16e} {:23.16e}",
-                                      stress[0], stress[1], stress[2], stress[3], stress[4], stress[5]);
+            auto *stress = ifix->virial;
+            block = fmt::format("{:23.16e} {:23.16e} {:23.16e} {:23.16e} {:23.16e} {:23.16e}",
+                                stress[0], stress[1], stress[2], stress[3], stress[4], stress[5]);
             writer.emit_block("run_stress", block);
         }
 
@@ -229,7 +229,7 @@ void generate_yaml_file(const char *outfile, const TestConfig &config)
 
     // run_pos
     block.clear();
-    auto x = lmp->atom->x;
+    auto *x = lmp->atom->x;
     for (int i = 1; i <= natoms; ++i) {
         const int j = lmp->atom->map(i);
         block += fmt::format("{:3} {:23.16e} {:23.16e} {:23.16e}\n", i, x[j][0], x[j][1], x[j][2]);
@@ -238,12 +238,26 @@ void generate_yaml_file(const char *outfile, const TestConfig &config)
 
     // run_vel
     block.clear();
-    auto v = lmp->atom->v;
+    auto *v = lmp->atom->v;
     for (int i = 1; i <= natoms; ++i) {
         const int j = lmp->atom->map(i);
         block += fmt::format("{:3} {:23.16e} {:23.16e} {:23.16e}\n", i, v[j][0], v[j][1], v[j][2]);
     }
     writer.emit_block("run_vel", block);
+
+    // run_torque
+
+    if (lmp->atom->torque_flag) {
+        block.clear();
+        auto *t = lmp->atom->torque;
+        for (int i = 1; i <= natoms; ++i) {
+            const int j = lmp->atom->map(i);
+            block +=
+                fmt::format("{:3} {:23.16e} {:23.16e} {:23.16e}\n", i, t[j][0], t[j][1], t[j][2]);
+        }
+        writer.emit_block("run_torque", block);
+    }
+
     cleanup_lammps(lmp, config);
 }
 
@@ -288,8 +302,11 @@ TEST(FixTimestep, plain)
 
     EXPECT_POSITIONS("run_pos (normal run, verlet)", lmp->atom, test_config.run_pos, epsilon);
     EXPECT_VELOCITIES("run_vel (normal run, verlet)", lmp->atom, test_config.run_vel, epsilon);
+    if (lmp->atom->torque_flag)
+        EXPECT_TORQUES("run_torques (normal run, verlet)", lmp->atom, test_config.run_torque,
+                       epsilon);
 
-    auto ifix = lmp->modify->get_fix_by_id("test");
+    auto *ifix = lmp->modify->get_fix_by_id("test");
     if (!ifix) {
         FAIL() << "ERROR: no fix defined with fix ID 'test'\n";
     } else {
@@ -317,8 +334,8 @@ TEST(FixTimestep, plain)
 
         // check t_target for thermostats
 
-        int dim     = -1;
-        double *ptr = (double *)ifix->extract("t_target", dim);
+        int dim   = -1;
+        auto *ptr = (double *)ifix->extract("t_target", dim);
         if ((ptr != nullptr) && (dim == 0)) {
             int ivar = lmp->input->variable->find("t_target");
             if (ivar >= 0) {
@@ -337,6 +354,8 @@ TEST(FixTimestep, plain)
 
     EXPECT_POSITIONS("run_pos (restart, verlet)", lmp->atom, test_config.run_pos, epsilon);
     EXPECT_VELOCITIES("run_vel (restart, verlet)", lmp->atom, test_config.run_vel, epsilon);
+    if (lmp->atom->torque_flag)
+        EXPECT_TORQUES("run_torque (restart, verlet)", lmp->atom, test_config.run_torque, epsilon);
 
     ifix = lmp->modify->get_fix_by_id("test");
     if (!ifix) {
@@ -411,7 +430,8 @@ TEST(FixTimestep, plain)
     // fix nve/limit cannot work with r-RESPA
     ifix = lmp->modify->get_fix_by_id("test");
     if (ifix && !utils::strmatch(ifix->style, "^rigid") &&
-        !utils::strmatch(ifix->style, "^nve/limit")) {
+        !utils::strmatch(ifix->style, "^nve/limit") &&
+        !utils::strmatch(ifix->style, "^recenter")) {
         if (!verbose) ::testing::internal::CaptureStdout();
         cleanup_lammps(lmp, test_config);
         if (!verbose) ::testing::internal::GetCapturedStdout();
@@ -583,7 +603,7 @@ TEST(FixTimestep, omp)
     EXPECT_POSITIONS("run_pos (normal run, verlet)", lmp->atom, test_config.run_pos, epsilon);
     EXPECT_VELOCITIES("run_vel (normal run, verlet)", lmp->atom, test_config.run_vel, epsilon);
 
-    auto ifix = lmp->modify->get_fix_by_id("test");
+    auto *ifix = lmp->modify->get_fix_by_id("test");
     if (!ifix) {
         FAIL() << "ERROR: no fix defined with fix ID 'test'\n";
     } else {
@@ -611,8 +631,8 @@ TEST(FixTimestep, omp)
 
         // check t_target for thermostats
 
-        int dim     = -1;
-        double *ptr = (double *)ifix->extract("t_target", dim);
+        int dim   = -1;
+        auto *ptr = (double *)ifix->extract("t_target", dim);
         if ((ptr != nullptr) && (dim == 0)) {
             int ivar = lmp->input->variable->find("t_target");
             if (ivar >= 0) {
@@ -827,6 +847,184 @@ TEST(FixTimestep, omp)
             }
         }
     }
+
+    if (!verbose) ::testing::internal::CaptureStdout();
+    cleanup_lammps(lmp, test_config);
+    if (!verbose) ::testing::internal::GetCapturedStdout();
+};
+
+TEST(FixTimestep, kokkos_omp)
+{
+    if (!LAMMPS::is_installed_pkg("KOKKOS")) GTEST_SKIP();
+    if (test_config.skip_tests.count(test_info_->name())) GTEST_SKIP();
+    if (!Info::has_accelerator_feature("KOKKOS", "api", "openmp")) GTEST_SKIP();
+    // if KOKKOS has GPU support enabled, it *must* be used. We cannot test OpenMP only.
+    if (Info::has_accelerator_feature("KOKKOS", "api", "cuda") ||
+        Info::has_accelerator_feature("KOKKOS", "api", "hip") ||
+        Info::has_accelerator_feature("KOKKOS", "api", "sycl")) GTEST_SKIP();
+
+    LAMMPS::argv args = {"FixTimestep", "-log", "none", "-echo", "screen", "-nocite",
+                         "-k",          "on",   "t",    "4",     "-sf",    "kk"};
+
+    ::testing::internal::CaptureStdout();
+    LAMMPS *lmp        = init_lammps(args, test_config);
+    std::string output = ::testing::internal::GetCapturedStdout();
+    if (verbose) std::cout << output;
+
+    if (!lmp) {
+        std::cerr << "One or more prerequisite styles with /kk suffix\n"
+                     "are not available in this LAMMPS configuration:\n";
+        for (auto &prerequisite : test_config.prerequisites) {
+            std::cerr << prerequisite.first << "_style " << prerequisite.second << "\n";
+        }
+        GTEST_SKIP();
+    }
+
+    EXPECT_THAT(output, StartsWith("LAMMPS ("));
+    EXPECT_THAT(output, HasSubstr("Loop time"));
+
+    // abort if running in parallel and not all atoms are local
+    const int nlocal = lmp->atom->nlocal;
+    ASSERT_EQ(lmp->atom->natoms, nlocal);
+
+    // relax error a bit for KOKKOS package
+    double epsilon = 10.0 * test_config.epsilon;
+    // relax test precision when using pppm and single precision FFTs
+#if defined(FFT_SINGLE)
+    if (lmp->force->kspace && utils::strmatch(lmp->force->kspace_style, "^pppm")) epsilon *= 2.0e8;
+#endif
+
+    ErrorStats stats;
+
+    EXPECT_POSITIONS("run_pos (normal run, verlet)", lmp->atom, test_config.run_pos, epsilon);
+    EXPECT_VELOCITIES("run_vel (normal run, verlet)", lmp->atom, test_config.run_vel, epsilon);
+    if (lmp->atom->torque_flag)
+        EXPECT_TORQUES("run_torque (normal run, verlet)", lmp->atom, test_config.run_torque,
+                       epsilon);
+
+    auto *ifix = lmp->modify->get_fix_by_id("test");
+
+    if (!ifix) {
+        FAIL() << "ERROR: no fix defined with fix ID 'test'\n";
+    } else {
+
+        if (ifix->thermo_virial) {
+            EXPECT_STRESS("run_stress (normal run, verlet)", ifix->virial, test_config.run_stress,
+                          epsilon);
+        }
+
+        stats.reset();
+        // global scalar
+        if (ifix->scalar_flag) {
+            double value = ifix->compute_scalar();
+            EXPECT_FP_LE_WITH_EPS(test_config.global_scalar, value, epsilon);
+        }
+
+        // global vector
+        if (ifix->vector_flag) {
+            int num = ifix->size_vector;
+            EXPECT_EQ(num, test_config.global_vector.size());
+
+            for (int i = 0; i < num; ++i)
+                EXPECT_FP_LE_WITH_EPS(test_config.global_vector[i], ifix->compute_vector(i),
+                                      epsilon);
+        }
+
+        // check t_target for thermostats
+
+        int dim     = -1;
+        double *ptr = (double *)ifix->extract("t_target", dim);
+        if ((ptr != nullptr) && (dim == 0)) {
+            int ivar = lmp->input->variable->find("t_target");
+            if (ivar >= 0) {
+                double t_ref    = atof(lmp->input->variable->retrieve("t_target"));
+                double t_target = *ptr;
+                EXPECT_FP_LE_WITH_EPS(t_target, t_ref, epsilon);
+            }
+        }
+        if (print_stats && stats.has_data())
+            std::cerr << "global_data, normal run, verlet: " << stats << std::endl;
+    }
+
+    if (!verbose) ::testing::internal::CaptureStdout();
+    restart_lammps(lmp, test_config, false, false);
+    if (!verbose) ::testing::internal::GetCapturedStdout();
+
+    EXPECT_POSITIONS("run_pos (restart, verlet)", lmp->atom, test_config.run_pos, epsilon);
+    EXPECT_VELOCITIES("run_vel (restart, verlet)", lmp->atom, test_config.run_vel, epsilon);
+    if (lmp->atom->torque_flag)
+        EXPECT_TORQUES("run_torque (restart, verlet)", lmp->atom, test_config.run_torque, epsilon);
+
+    ifix = lmp->modify->get_fix_by_id("test");
+    if (!ifix) {
+        FAIL() << "ERROR: no fix defined with fix ID 'test'\n";
+    } else {
+        if (ifix->thermo_virial) {
+            EXPECT_STRESS("run_stress (restart, verlet)", ifix->virial, test_config.run_stress,
+                          epsilon);
+        }
+
+        stats.reset();
+
+        // global scalar
+        if (ifix->scalar_flag) {
+            double value = ifix->compute_scalar();
+            EXPECT_FP_LE_WITH_EPS(test_config.global_scalar, value, epsilon);
+        }
+
+        // global vector
+        if (ifix->vector_flag) {
+            int num = ifix->size_vector;
+            EXPECT_EQ(num, test_config.global_vector.size());
+
+            for (int i = 0; i < num; ++i)
+                EXPECT_FP_LE_WITH_EPS(test_config.global_vector[i], ifix->compute_vector(i),
+                                      epsilon);
+        }
+        if (print_stats && stats.has_data())
+            std::cerr << "global_data, restart, verlet: " << stats << std::endl;
+    }
+
+    if (lmp->atom->rmass == nullptr) {
+        if (!verbose) ::testing::internal::CaptureStdout();
+        restart_lammps(lmp, test_config, true, false);
+        if (!verbose) ::testing::internal::GetCapturedStdout();
+
+        EXPECT_POSITIONS("run_pos (rmass, verlet)", lmp->atom, test_config.run_pos, epsilon);
+        EXPECT_VELOCITIES("run_vel (rmass, verlet)", lmp->atom, test_config.run_vel, epsilon);
+
+        ifix = lmp->modify->get_fix_by_id("test");
+        if (!ifix) {
+            FAIL() << "ERROR: no fix defined with fix ID 'test'\n";
+        } else {
+            if (ifix->thermo_virial) {
+                EXPECT_STRESS("run_stress (rmass, verlet)", ifix->virial, test_config.run_stress,
+                              epsilon);
+            }
+
+            stats.reset();
+
+            // global scalar
+            if (ifix->scalar_flag) {
+                double value = ifix->compute_scalar();
+                EXPECT_FP_LE_WITH_EPS(test_config.global_scalar, value, epsilon);
+            }
+
+            // global vector
+            if (ifix->vector_flag) {
+                int num = ifix->size_vector;
+                EXPECT_EQ(num, test_config.global_vector.size());
+
+                for (int i = 0; i < num; ++i)
+                    EXPECT_FP_LE_WITH_EPS(test_config.global_vector[i], ifix->compute_vector(i),
+                                          epsilon);
+            }
+            if (print_stats && stats.has_data())
+                std::cerr << "global_data, rmass, verlet: " << stats << std::endl;
+        }
+    }
+
+    // skip RESPA tests for KOKKOS
 
     if (!verbose) ::testing::internal::CaptureStdout();
     cleanup_lammps(lmp, test_config);

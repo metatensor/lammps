@@ -42,19 +42,20 @@ enum{DISCARD,KEEP};
 
 static constexpr int OFFSET = 16384;
 
+// clang-format on
 /* ---------------------------------------------------------------------- */
 
 FixAveGrid::FixAveGrid(LAMMPS *lmp, int narg, char **arg) :
-  Fix(lmp, narg, arg), id_bias(nullptr), which(nullptr), argindex(nullptr), ids(nullptr),
-  value2index(nullptr), value2grid(nullptr), value2data(nullptr), grid2d(nullptr), grid3d(nullptr),
-  grid_buf1(nullptr), grid_buf2(nullptr), grid_output(nullptr), grid_sample(nullptr),
-  grid_nfreq(nullptr), grid_running(nullptr), grid_window(nullptr), grid2d_previous(nullptr),
-  grid3d_previous(nullptr), grid_sample_previous(nullptr), grid_nfreq_previous(nullptr),
-  grid_running_previous(nullptr), grid_window_previous(nullptr), bin(nullptr), skip(nullptr),
-  vresult(nullptr)
+    Fix(lmp, narg, arg), id_bias(nullptr), which(nullptr), argindex(nullptr), ids(nullptr),
+    value2index(nullptr), value2grid(nullptr), value2data(nullptr), grid2d(nullptr),
+    grid3d(nullptr), grid_buf1(nullptr), grid_buf2(nullptr), grid_output(nullptr),
+    grid_sample(nullptr), grid_nfreq(nullptr), grid_running(nullptr), grid_window(nullptr),
+    grid2d_previous(nullptr), grid3d_previous(nullptr), grid_sample_previous(nullptr),
+    grid_nfreq_previous(nullptr), grid_running_previous(nullptr), grid_window_previous(nullptr),
+    bin(nullptr), skip(nullptr), vresult(nullptr)
 {
-  if (narg < 10) utils::missing_cmd_args(FLERR,"fix ave/grid", error);
-
+  if (narg < 10) utils::missing_cmd_args(FLERR, "fix ave/grid", error);
+  // clang-format off
   pergrid_flag = 1;
   nevery = utils::inumeric(FLERR,arg[3],false,lmp);
   nrepeat = utils::inumeric(FLERR,arg[4],false,lmp);
@@ -193,20 +194,19 @@ FixAveGrid::FixAveGrid(LAMMPS *lmp, int narg, char **arg) :
   aveflag = ONE;
   nwindow = 0;
   biasflag = 0;
-  id_bias = nullptr;
   adof = domain->dimension;
   cdof = 0.0;
 
   while (iarg < nargnew) {
     if (strcmp(arg[iarg],"discard") == 0) {
-      if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/grid command");
+      if (iarg+2 > nargnew) error->all(FLERR,"Illegal fix ave/grid command");
       if (strcmp(arg[iarg+1],"yes") == 0) discardflag = DISCARD;
       else if (strcmp(arg[iarg+1],"no") == 0) discardflag = KEEP;
       else error->all(FLERR,"Illegal fix ave/grid command");
       iarg += 2;
 
     } else if (strcmp(arg[iarg],"norm") == 0) {
-      if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/grid command");
+      if (iarg+2 > nargnew) error->all(FLERR,"Illegal fix ave/grid command");
       if (strcmp(arg[iarg+1],"all") == 0) normflag = ALL;
       else if (strcmp(arg[iarg+1],"sample") == 0) normflag = SAMPLE;
       else if (strcmp(arg[iarg+1],"none") == 0) normflag = NONORM;
@@ -214,13 +214,13 @@ FixAveGrid::FixAveGrid(LAMMPS *lmp, int narg, char **arg) :
       iarg += 2;
 
     } else if (strcmp(arg[iarg],"ave") == 0) {
-      if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/grid command");
+      if (iarg+2 > nargnew) error->all(FLERR,"Illegal fix ave/grid command");
       if (strcmp(arg[iarg+1],"one") == 0) aveflag = ONE;
       else if (strcmp(arg[iarg+1],"running") == 0) aveflag = RUNNING;
       else if (strcmp(arg[iarg+1],"window") == 0) aveflag = WINDOW;
       else error->all(FLERR,"Illegal fix ave/grid command");
       if (aveflag == WINDOW) {
-        if (iarg+3 > narg) error->all(FLERR,"Illegal fix ave/grid command");
+        if (iarg+3 > nargnew) error->all(FLERR,"Illegal fix ave/grid command");
         nwindow = utils::inumeric(FLERR,arg[iarg+2],false,lmp);
         if (nwindow <= 0) error->all(FLERR,"Illegal fix ave/grid command");
         iarg++;
@@ -228,19 +228,20 @@ FixAveGrid::FixAveGrid(LAMMPS *lmp, int narg, char **arg) :
       iarg += 2;
 
     } else if (strcmp(arg[iarg],"bias") == 0) {
-      if (iarg+2 > narg)
+      if (iarg+2 > nargnew)
         error->all(FLERR,"Illegal fix ave/grid command");
       biasflag = 1;
+      delete[] id_bias;
       id_bias = utils::strdup(arg[iarg+1]);
       iarg += 2;
 
     } else if (strcmp(arg[iarg],"adof") == 0) {
-      if (iarg+2 > narg)
+      if (iarg+2 > nargnew)
         error->all(FLERR,"Illegal fix ave/grid command");
       adof = utils::numeric(FLERR,arg[iarg+1],false,lmp);
       iarg += 2;
     } else if (strcmp(arg[iarg],"cdof") == 0) {
-      if (iarg+2 > narg)
+      if (iarg+2 > nargnew)
         error->all(FLERR,"Illegal fix ave/grid command");
       cdof = utils::numeric(FLERR,arg[iarg+1],false,lmp);
       iarg += 2;
@@ -347,11 +348,7 @@ FixAveGrid::FixAveGrid(LAMMPS *lmp, int narg, char **arg) :
   // vresult for per-atom variable evaluation
 
   maxatom = 0;
-  bin = nullptr;
-  skip = nullptr;
-
   maxvar = 0;
-  vresult = nullptr;
 
   // nvalid = next step on which end_of_step does something
   // add nvalid to all computes that store invocation times
@@ -372,6 +369,7 @@ FixAveGrid::~FixAveGrid()
   delete[] argindex;
   for (int m = 0; m < nvalues; m++) delete[] ids[m];
   delete[] ids;
+  delete[] id_bias;
   delete[] value2index;
   delete[] value2grid;
   delete[] value2data;
@@ -451,10 +449,10 @@ void FixAveGrid::init()
   // check that grid sizes for all fields match grid size for this fix
 
   if (modegrid) {
-    Compute *compute;
-    Fix *fix;
-    Grid2d *grid2d;
-    Grid3d *grid3d;
+    Compute *compute = nullptr;
+    Fix *fix = nullptr;
+    Grid2d *grid2d = nullptr;
+    Grid3d *grid3d = nullptr;
 
     int nxtmp,nytmp,nztmp;
 
@@ -463,7 +461,7 @@ void FixAveGrid::init()
         if (which[m] == ArgInfo::COMPUTE) {
           compute = modify->get_compute_by_index(value2index[m]);
           grid2d = (Grid2d *) compute->get_grid_by_index(value2grid[m]);
-        } else {
+        } else if (which[m] == ArgInfo::FIX) {
           fix = modify->get_fix_by_index(value2index[m]);
           grid2d = (Grid2d *) fix->get_grid_by_index(value2grid[m]);
         }
@@ -475,7 +473,7 @@ void FixAveGrid::init()
         if (which[m] == ArgInfo::COMPUTE) {
           compute = modify->get_compute_by_index(value2index[m]);
           grid3d = (Grid3d *) compute->get_grid_by_index(value2grid[m]);
-        } else {
+        } else if (which[m] == ArgInfo::FIX) {
           fix = modify->get_fix_by_index(value2index[m]);
           grid3d = (Grid3d *) fix->get_grid_by_index(value2grid[m]);
         }
@@ -684,11 +682,13 @@ void FixAveGrid::atom2grid()
   double ***vec3d = grid_sample->vec3d;
   double ****array3d = grid_sample->array3d;
 
+  // scan my owned atoms before tallying to bins
   // bin[i][dim] = indices of bin each atom is in
+  // count[][] or count[][][] = count of atoms contributing to each bin
+  // error check if any atom is out of bounds for my local+ghost grid cells
   // skip atom if group mask does not match
-  // check if any atom is out of bounds for my local grid
-  // for nonperiodic dim, remap atom to first/last bin if out of bounds
-  // count atoms contributing to each bin
+  // skip atom if out of bounds for a nonperiodic dim and discardflag = DISCARD
+  // if out of bounds for a nonperiodic dim and discardflag = KEEP, remap atom to first/last bin
 
   double *boxlo,*prd;
   int *periodicity = domain->periodicity;
@@ -719,6 +719,7 @@ void FixAveGrid::atom2grid()
 
   if (triclinic) domain->x2lamda(nlocal);
 
+  // set to 1
   int flag = 0;
 
   if (dimension == 2) {
@@ -732,22 +733,36 @@ void FixAveGrid::atom2grid()
       iy = static_cast<int> ((x[i][1]-boxlo[1])*dyinv + OFFSET) - OFFSET;
 
       if (ix < nxlo_out || ix > nxhi_out) {
-        if (periodicity[0]) flag = 1;
-        else if (discardflag == KEEP) {
+        if (periodicity[0]) {
+          flag = 1;
+          continue;
+        } else if (discardflag == KEEP) {
           if (ix < nxlo_out && nxlo_out == 0) ix = 0;
           else if (ix > nxhi_out && nxhi_out == nxgrid-1) ix = nxgrid-1;
-          else flag = 1;
-        } else skip[i] = 1;
-        continue;
+          else {
+            flag = 1;
+            continue;
+          }
+        } else {
+          skip[i] = 1;
+          continue;
+        }
       }
       if (iy < nylo_out || iy > nyhi_out) {
-        if (periodicity[1]) flag = 1;
-        else if (discardflag == KEEP) {
+        if (periodicity[1]) {
+          flag = 1;
+          continue;
+        } else if (discardflag == KEEP) {
           if (iy < nylo_out && nylo_out == 0) iy = 0;
           else if (iy > nyhi_out && nyhi_out == nygrid-1) iy = nygrid-1;
-          else flag = 1;
-        } else skip[i] = 1;
-        continue;
+          else {
+            flag = 1;
+            continue;
+          }
+        } else {
+          skip[i] = 1;
+          continue;
+        }
       }
 
       skip[i] = 0;
@@ -768,32 +783,54 @@ void FixAveGrid::atom2grid()
       iz = static_cast<int> ((x[i][2]-boxlo[2])*dzinv + OFFSET) - OFFSET;
 
       if (ix < nxlo_out || ix > nxhi_out) {
-        if (periodicity[0]) flag = 1;
-        else if (discardflag == KEEP) {
+        if (periodicity[0]) {
+          flag = 1;
+          continue;
+        } else if (discardflag == KEEP) {
           if (ix < nxlo_out && nxlo_out == 0) ix = 0;
           else if (ix > nxhi_out && nxhi_out == nxgrid-1) ix = nxgrid-1;
-          else flag = 1;
-        } else skip[i] = 1;
+          else {
+            flag = 1;
+            continue;
+          }
+        } else {
+          skip[i] = 1;
+          continue;
+        }
       }
 
       if (iy < nylo_out || iy > nyhi_out) {
-        if (periodicity[1]) flag = 1;
-        else if (discardflag == KEEP) {
+        if (periodicity[1]) {
+          flag = 1;
+          continue;
+        } else if (discardflag == KEEP) {
           if (iy < nylo_out && nylo_out == 0) iy = 0;
           else if (iy > nyhi_out && nyhi_out == nygrid-1) iy = nygrid-1;
-          else flag = 1;
-        } else skip[i] = 1;
-        continue;
+          else {
+            flag = 1;
+            continue;
+          }
+        } else {
+          skip[i] = 1;
+          continue;
+        }
       }
 
       if (iz < nzlo_out || iz > nzhi_out) {
-        if (periodicity[2]) flag = 1;
-        else if (discardflag == KEEP) {
+        if (periodicity[2]) {
+          flag = 1;
+          continue;
+        } else if (discardflag == KEEP) {
           if (iz < nzlo_out && nzlo_out == 0) iz = 0;
           else if (iz > nzhi_out && nzhi_out == nzgrid-1) iz = nzgrid-1;
-          else flag = 1;
-        } else skip[i] = 1;
-        continue;
+          else {
+            flag = 1;
+            continue;
+          }
+        } else {
+          skip[i] = 1;
+          continue;
+        }
       }
 
       skip[i] = 0;
@@ -1088,7 +1125,7 @@ void FixAveGrid::grid2grid()
           ovec2d = (double **) compute->get_griddata_by_index(idata);
         else
           oarray2d = (double ***) compute->get_griddata_by_index(idata);
-      } else {
+      } else if (which[m] == ArgInfo::FIX) {
         if (j == 0)
           ovec2d = (double **) fix->get_griddata_by_index(idata);
         else
@@ -1126,7 +1163,7 @@ void FixAveGrid::grid2grid()
           ovec3d = (double ***) compute->get_griddata_by_index(idata);
         else
           oarray3d = (double ****) compute->get_griddata_by_index(idata);
-      } else {
+      } else if (which[m] == ArgInfo::FIX) {
         if (j == 0) {
           ovec3d = (double ***) fix->get_griddata_by_index(idata);
         } else

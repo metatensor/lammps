@@ -134,6 +134,8 @@ Lowercase directories
 +-------------+------------------------------------------------------------------+
 | rerun       | use of rerun and read_dump commands                              |
 +-------------+------------------------------------------------------------------+
+| rheo        | RHEO simulations of fluid flows and phase transitions            |
++-------------+------------------------------------------------------------------+
 | rigid       | rigid bodies modeled as independent or coupled                   |
 +-------------+------------------------------------------------------------------+
 | shear       | sideways shear applied to 2d solid, with and without a void      |
@@ -143,6 +145,8 @@ Lowercase directories
 | srd         | stochastic rotation dynamics (SRD) particles as solvent          |
 +-------------+------------------------------------------------------------------+
 | streitz     | use of Streitz/Mintmire potential with charge equilibration      |
++-------------+------------------------------------------------------------------+
+| stress_vcm  | removing binned rigid body motion from binned stress profile     |
 +-------------+------------------------------------------------------------------+
 | tad         | temperature-accelerated dynamics of vacancy diffusion in bulk Si |
 +-------------+------------------------------------------------------------------+

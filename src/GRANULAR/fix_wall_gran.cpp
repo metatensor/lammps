@@ -163,8 +163,12 @@ FixWallGran::FixWallGran(LAMMPS *lmp, int narg, char **arg) :
   } else if (strcmp(arg[iarg],"region") == 0) {
     if (narg < iarg+2) error->all(FLERR,"Illegal fix wall/gran command");
     wallstyle = REGION;
+    delete[] idregion;
     idregion = utils::strdup(arg[iarg+1]);
     iarg += 2;
+    // This option is only compatible with fix wall/gran/region
+    if (!utils::strmatch(style, "^wall/gran/region"))
+      error->all(FLERR, "Region option only compatible with fix wall/gran/region");
   } else wallstyle = NOSTYLE;
 
   // optional args
@@ -202,6 +206,7 @@ FixWallGran::FixWallGran(LAMMPS *lmp, int narg, char **arg) :
     } else if (strcmp(arg[iarg],"temperature") == 0) {
       if (iarg+2 > narg) error->all(FLERR,"Illegal fix wall/gran command");
       if (utils::strmatch(arg[iarg+1], "^v_")) {
+        delete[] tstr;
         tstr = utils::strdup(arg[iarg+1] + 2);
       } else {
         Twall = utils::numeric(FLERR,arg[iarg+1],false,lmp);

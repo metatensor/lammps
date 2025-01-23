@@ -3,6 +3,9 @@
 # CMake build system
 # This file is part of LAMMPS
 cmake_minimum_required(VERSION 3.16)
+if(CMAKE_VERSION VERSION_LESS 3.20)
+  message(WARNING "LAMMPS is planning to require at least CMake version 3.20 by Summer 2025. Please upgrade!")
+endif()
 ########################################
 # set policy to silence warnings about ignoring <PackageName>_ROOT but use it
 if(POLICY CMP0074)
@@ -11,6 +14,11 @@ endif()
 # set policy to silence warnings about ignoring  ${CMAKE_REQUIRED_LIBRARIES} but use it
 if(POLICY CMP0075)
   cmake_policy(SET CMP0075 NEW)
+endif()
+# set policy to silence warnings about requiring execute permission for find_program
+# we use OLD because the python-config script for the Fedora MinGW cross-compiler requires it currently
+if(POLICY CMP0109)
+  cmake_policy(SET CMP0109 OLD)
 endif()
 # set policy to silence warnings about timestamps of downloaded files. review occasionally if it may be set to NEW
 if(POLICY CMP0135)
@@ -90,30 +98,27 @@ check_for_autogen_files(${LAMMPS_SOURCE_DIR})
 #####################################################################
 include(CheckIncludeFileCXX)
 
-# set required compiler flags and compiler/CPU arch specific optimizations
+# set required compiler flags, apply checks, and compiler/CPU arch specific optimizations
 if(CMAKE_CXX_COMPILER_ID STREQUAL "Intel")
+  # Intel classic compilers version 19 are broken and fail to compile the embedded fmtlib
+  if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 20.0)
+    message(ERROR "Intel classic compiler version ${CMAKE_CXX_COMPILER_VERSION} is too old")
+  endif()
+
   if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
     if(CMAKE_CXX_COMPILER_ID STREQUAL "Intel")
       set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /Qrestrict")
     endif()
-    if(CMAKE_CXX_COMPILER_VERSION VERSION_EQUAL 17.3 OR CMAKE_CXX_COMPILER_VERSION VERSION_EQUAL 17.4)
-      set(CMAKE_TUNE_DEFAULT "/QxCOMMON-AVX512")
-    else()
-      set(CMAKE_TUNE_DEFAULT "/QxHost")
-    endif()
+    set(CMAKE_TUNE_DEFAULT "/QxHost")
   else()
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -restrict")
-    if(CMAKE_CXX_COMPILER_VERSION VERSION_EQUAL 17.3 OR CMAKE_CXX_COMPILER_VERSION VERSION_EQUAL 17.4)
-      set(CMAKE_TUNE_DEFAULT "-xCOMMON-AVX512")
-    else()
-      set(CMAKE_TUNE_DEFAULT "-xHost -fp-model fast=2 -no-prec-div -qoverride-limits -diag-disable=10441 -diag-disable=11074 -diag-disable=11076 -diag-disable=2196")
-    endif()
+    set(CMAKE_TUNE_DEFAULT "-xHost -fp-model fast=2 -no-prec-div -qoverride-limits -diag-disable=10441 -diag-disable=11074 -diag-disable=11076 -diag-disable=2196")
   endif()
 endif()
 
 # silence excessive warnings for new Intel Compilers
 if(CMAKE_CXX_COMPILER_ID STREQUAL "IntelLLVM")
-  set(CMAKE_TUNE_DEFAULT "-Wno-tautological-constant-compare -Wno-unused-command-line-argument")
+  set(CMAKE_TUNE_DEFAULT "-fp-model precise -Wno-tautological-constant-compare -Wno-unused-command-line-argument")
 endif()
 
 # silence excessive warnings for PGI/NVHPC compilers
@@ -136,18 +141,30 @@ endif()
 
 # silence nvcc warnings
 if((PKG_KOKKOS) AND (Kokkos_ENABLE_CUDA) AND NOT (CMAKE_CXX_COMPILER_ID STREQUAL "Clang"))
-  set(CMAKE_TUNE_DEFAULT "${CMAKE_TUNE_DEFAULT} -Xcudafe --diag_suppress=unrecognized_pragma")
+  set(CMAKE_TUNE_DEFAULT "${CMAKE_TUNE_DEFAULT}" "-Xcudafe --diag_suppress=unrecognized_pragma,--diag_suppress=128")
 endif()
 
-# we require C++11 without extensions. Kokkos requires at least C++17 (currently)
+# we *require* C++11 without extensions but prefer C++17.
+# Kokkos requires at least C++17 (currently)
 if(NOT CMAKE_CXX_STANDARD)
-  set(CMAKE_CXX_STANDARD 11)
+  if(cxx_std_17 IN_LIST CMAKE_CXX_COMPILE_FEATURES)
+    set(CMAKE_CXX_STANDARD 17)
+  else()
+    set(CMAKE_CXX_STANDARD 11)
+  endif()
 endif()
 if(CMAKE_CXX_STANDARD LESS 11)
   message(FATAL_ERROR "C++ standard must be set to at least 11")
 endif()
+if(CMAKE_CXX_STANDARD LESS 17)
+  message(WARNING "Selecting C++17 standard is preferred over C++${CMAKE_CXX_STANDARD}")
+endif()
 if((PKG_KOKKOS OR PKG_ML-METATENSOR) AND (CMAKE_CXX_STANDARD LESS 17))
   set(CMAKE_CXX_STANDARD 17)
+endif()
+# turn off C++17 check in lmptype.h
+if(LAMMPS_CXX11)
+  add_compile_definitions(LAMMPS_CXX11)
 endif()
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF CACHE BOOL "Use compiler extensions")
@@ -160,8 +177,25 @@ if(MSVC)
     add_compile_options(/wd4267)
     add_compile_options(/wd4250)
     add_compile_options(/EHsc)
+    add_compile_options(/utf-8)
   endif()
   add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
+endif()
+
+# warn about potentially problematic GCC compiler versions
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  if (CMAKE_CXX_STANDARD GREATER_EQUAL 17)
+    if (CMAKE_CXX_COMPILER_VERSION VERSION_LESS 9.0)
+      message(WARNING "Using ${CMAKE_CXX_COMPILER_ID} compiler version ${CMAKE_CXX_COMPILER_VERSION} "
+        "with C++17 is not recommended. Please use ${CMAKE_CXX_COMPILER_ID} compiler version 9.x or later")
+    endif()
+  endif()
+  if (CMAKE_CXX_STANDARD GREATER_EQUAL 11)
+    if (CMAKE_CXX_COMPILER_VERSION VERSION_LESS 5.0)
+      message(WARNING "Using ${CMAKE_CXX_COMPILER_ID} compiler version ${CMAKE_CXX_COMPILER_VERSION} "
+        "with C++11 is not recommended. Please use ${CMAKE_CXX_COMPILER_ID} compiler version 5.x or later")
+    endif()
+  endif()
 endif()
 
 # export all symbols when building a .dll file on windows
@@ -198,13 +232,12 @@ set(LAMMPS_BINARY lmp${LAMMPS_MACHINE})
 option(BUILD_SHARED_LIBS "Build shared library" OFF)
 option(CMAKE_POSITION_INDEPENDENT_CODE "Create object compatible with shared libraries" ON)
 option(BUILD_TOOLS "Build and install LAMMPS tools (msi2lmp, binary2txt, chain)" OFF)
-option(BUILD_LAMMPS_SHELL "Build and install the LAMMPS shell" OFF)
 option(BUILD_LAMMPS_GUI "Build and install the LAMMPS GUI" OFF)
 
 # Support using clang-tidy for C++ files with selected options
 set(ENABLE_CLANG_TIDY OFF CACHE BOOL "Include clang-tidy processing when compiling")
 if(ENABLE_CLANG_TIDY)
-  set(CMAKE_CXX_CLANG_TIDY "clang-tidy;-checks=-*,performance-trivially-destructible,performance-unnecessary-copy-initialization,performance-unnecessary-value-param,readability-redundant-control-flow,readability-redundant-declaration,readability-redundant-function-ptr-dereference,readability-redundant-member-init,readability-redundant-string-cstr,readability-redundant-string-init,readability-simplify-boolean-expr,readability-static-accessed-through-instance,readability-static-definition-in-anonymous-namespace,modernize-use-override,modernize-use-bool-literals,modernize-use-emplace,modernize-return-braced-init-list,modernize-use-equals-default,modernize-use-equals-delete,modernize-replace-random-shuffle,modernize-deprecated-headers,modernize-use-nullptr,modernize-use-noexcept,modernize-redundant-void-arg;-fix;-header-filter=.*,header-filter=library.h,header-filter=fmt/*.h" CACHE STRING "clang-tidy settings")
+  set(CMAKE_CXX_CLANG_TIDY "clang-tidy;-checks=-*,performance-trivially-destructible,performance-unnecessary-copy-initialization,performance-unnecessary-value-param,readability-redundant-control-flow,readability-redundant-declaration,readability-redundant-function-ptr-dereference,readability-redundant-member-init,readability-redundant-string-cstr,readability-redundant-string-init,readability-simplify-boolean-expr,readability-static-accessed-through-instance,readability-static-definition-in-anonymous-namespace,readability-qualified-auto,misc-unused-parameters,modernize-deprecated-ios-base-aliases,modernize-loop-convert,modernize-shrink-to-fit,modernize-use-auto,modernize-use-using,modernize-use-override,modernize-use-bool-literals,modernize-use-emplace,modernize-return-braced-init-list,modernize-use-equals-default,modernize-use-equals-delete,modernize-replace-random-shuffle,modernize-deprecated-headers,modernize-use-nullptr,modernize-use-noexcept,modernize-redundant-void-arg;-fix;-header-filter=.*,header-filter=library.h,header-filter=fmt/*.h" CACHE STRING "clang-tidy settings")
 else()
   unset(CMAKE_CXX_CLANG_TIDY CACHE)
 endif()
@@ -307,6 +340,7 @@ set(STANDARD_PACKAGES
   REACTION
   REAXFF
   REPLICA
+  RHEO
   RIGID
   SCAFACOS
   SHOCK
@@ -324,6 +358,17 @@ set(SUFFIX_PACKAGES CORESHELL GPU KOKKOS OPT INTEL OPENMP)
 
 foreach(PKG ${STANDARD_PACKAGES} ${SUFFIX_PACKAGES})
   option(PKG_${PKG} "Build ${PKG} Package" OFF)
+endforeach()
+
+set(DEPRECATED_PACKAGES AWPMD ATC POEMS)
+foreach(PKG ${DEPRECATED_PACKAGES})
+  if(PKG_${PKG})
+    message(WARNING
+          "The ${PKG} package will be removed from LAMMPS in Summer 2025 due to lack of "
+          "maintenance and use of code constructs that conflict with modern C++ compilers "
+          "and standards.  Please contact developers@lammps.org if you have any concerns "
+          "about this step.")
+  endif()
 endforeach()
 
 ######################################################
@@ -411,6 +456,7 @@ pkg_depends(CG-DNA ASPHERE)
 pkg_depends(ELECTRODE KSPACE)
 pkg_depends(EXTRA-MOLECULE MOLECULE)
 pkg_depends(MESONT MOLECULE)
+pkg_depends(RHEO BPM)
 
 # detect if we may enable OpenMP support by default
 set(BUILD_OMP_DEFAULT OFF)
@@ -453,13 +499,13 @@ if(BUILD_OMP)
   if(CMAKE_VERSION VERSION_LESS 3.28)
     get_filename_component(_exe "${CMAKE_CXX_COMPILER}" NAME)
     if((CMAKE_CXX_COMPILER_ID STREQUAL "Clang") AND (_exe STREQUAL "crayCC"))
-      set(CMAKE_SHARED_LINKER_FLAGS_${BTYPE} "${CMAKE_SHARED_LINKER_FLAGS_${BTYPE} -fopenmp")
-      set(CMAKE_STATIC_LINKER_FLAGS_${BTYPE} "${CMAKE_STATIC_LINKER_FLAGS_${BTYPE} -fopenmp")
+      set(CMAKE_SHARED_LINKER_FLAGS_${BTYPE} "${CMAKE_SHARED_LINKER_FLAGS_${BTYPE}} -fopenmp")
+      set(CMAKE_STATIC_LINKER_FLAGS_${BTYPE} "${CMAKE_STATIC_LINKER_FLAGS_${BTYPE}} -fopenmp")
     endif()
   else()
     if(CMAKE_CXX_COMPILER_ID STREQUAL "CrayClang")
-      set(CMAKE_SHARED_LINKER_FLAGS_${BTYPE} "${CMAKE_SHARED_LINKER_FLAGS_${BTYPE} -fopenmp")
-      set(CMAKE_STATIC_LINKER_FLAGS_${BTYPE} "${CMAKE_STATIC_LINKER_FLAGS_${BTYPE} -fopenmp")
+      set(CMAKE_SHARED_LINKER_FLAGS_${BTYPE} "${CMAKE_SHARED_LINKER_FLAGS_${BTYPE}} -fopenmp")
+      set(CMAKE_STATIC_LINKER_FLAGS_${BTYPE} "${CMAKE_STATIC_LINKER_FLAGS_${BTYPE}} -fopenmp")
     endif()
   endif()
 endif()
@@ -476,7 +522,7 @@ if((CMAKE_CXX_COMPILER_ID STREQUAL "Intel") AND (CMAKE_CXX_STANDARD GREATER_EQUA
           PROPERTIES COMPILE_OPTIONS "-std=c++14")
 endif()
 
-if(PKG_ATC OR PKG_AWPMD OR PKG_ML-QUIP OR PKG_ML-POD OR PKG_ELECTRODE OR BUILD_TOOLS)
+if(PKG_ATC OR PKG_AWPMD OR PKG_ML-QUIP OR PKG_ML-POD OR PKG_ELECTRODE OR PKG_RHEO OR BUILD_TOOLS)
   enable_language(C)
   if (NOT USE_INTERNAL_LINALG)
     find_package(LAPACK)
@@ -551,11 +597,21 @@ else()
 endif()
 
 foreach(PKG_WITH_INCL KSPACE PYTHON ML-IAP VORONOI COLVARS ML-HDNNP MDI MOLFILE NETCDF
-        PLUMED QMMM ML-QUIP SCAFACOS MACHDYN VTK KIM COMPRESS ML-PACE LEPTON ML-METATENSOR)
+        PLUMED QMMM ML-QUIP SCAFACOS MACHDYN VTK KIM COMPRESS ML-PACE ML-METATENSOR LEPTON EXTRA-COMMAND)
   if(PKG_${PKG_WITH_INCL})
     include(Packages/${PKG_WITH_INCL})
   endif()
 endforeach()
+
+# settings for misc packages and styles
+if(PKG_MISC)
+  option(LAMMPS_ASYNC_IMD "Asynchronous IMD processing" OFF)
+  mark_as_advanced(LAMMPS_ASYNC_IMD)
+  if(LAMMPS_ASYNC_IMD)
+    target_compile_definitions(lammps PRIVATE -DLAMMPS_ASYNC_IMD)
+    message(STATUS "Using IMD in asynchronous mode")
+  endif()
+endif()
 
 # optionally enable building script wrappers using swig
 option(WITH_SWIG "Build scripting language wrappers with SWIG" OFF)
@@ -566,13 +622,8 @@ endif()
 
 set(CMAKE_TUNE_FLAGS "${CMAKE_TUNE_DEFAULT}" CACHE STRING "Compiler and machine specific optimization flags (compilation only)")
 separate_arguments(CMAKE_TUNE_FLAGS)
-foreach(_FLAG ${CMAKE_TUNE_FLAGS})
-  target_compile_options(lammps PRIVATE ${_FLAG})
-  # skip these flags when linking the main executable
-  if(NOT (("${_FLAG}" STREQUAL "-Xcudafe") OR (("${_FLAG}" STREQUAL "--diag_suppress=unrecognized_pragma"))))
-    target_compile_options(lmp PRIVATE ${_FLAG})
-  endif()
-endforeach()
+target_compile_options(lammps PRIVATE ${CMAKE_TUNE_FLAGS})
+target_compile_options(lmp PRIVATE ${CMAKE_TUNE_FLAGS})
 ########################################################################
 # Basic system tests (standard libraries, headers, functions, types)   #
 ########################################################################
@@ -801,9 +852,15 @@ foreach(_DEF ${LAMMPS_DEFINES})
   set(LAMMPS_API_DEFINES "${LAMMPS_API_DEFINES} -D${_DEF}")
 endforeach()
 if(BUILD_SHARED_LIBS)
-  install(TARGETS lammps EXPORT LAMMPS_Targets LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+  install(TARGETS lammps EXPORT LAMMPS_Targets
+          LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+          ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+          RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
   if(NOT BUILD_MPI)
-    install(TARGETS mpi_stubs EXPORT LAMMPS_Targets LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+    install(TARGETS mpi_stubs EXPORT LAMMPS_Targets
+            LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
   endif()
   configure_file(pkgconfig/liblammps.pc.in ${CMAKE_CURRENT_BINARY_DIR}/liblammps${LAMMPS_MACHINE}.pc @ONLY)
   install(FILES ${CMAKE_CURRENT_BINARY_DIR}/liblammps${LAMMPS_MACHINE}.pc DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
@@ -871,7 +928,7 @@ endif()
 include(Testing)
 include(CodeCoverage)
 include(CodingStandard)
-find_package(ClangFormat 8.0)
+find_package(ClangFormat 11.0)
 
 if(ClangFormat_FOUND)
   add_custom_target(format-src
@@ -941,8 +998,12 @@ message(STATUS "<<< Compilers and Flags: >>>
 -- C++ Compiler:     ${CMAKE_CXX_COMPILER}
       Type:          ${CMAKE_CXX_COMPILER_ID}
       Version:       ${CMAKE_CXX_COMPILER_VERSION}
+      C++ Standard:  ${CMAKE_CXX_STANDARD}
       C++ Flags:    ${CMAKE_CXX_FLAGS} ${CMAKE_CXX_FLAGS_${BTYPE}}
       Defines:       ${DEFINES}")
+if(CMAKE_CXX_COMPILER_LAUNCHER)
+  message(STATUS "      Launcher:      ${CMAKE_CXX_COMPILER_LAUNCHER}")
+endif()
 get_target_property(OPTIONS lammps COMPILE_OPTIONS)
 if(OPTIONS)
   message("      Options:       ${OPTIONS}")
@@ -961,6 +1022,9 @@ if(_index GREATER -1)
       Type:          ${CMAKE_C_COMPILER_ID}
       Version:       ${CMAKE_C_COMPILER_VERSION}
       C Flags:      ${CMAKE_C_FLAGS} ${CMAKE_C_FLAGS_${BTYPE}}")
+  if(CMAKE_C_COMPILER_LAUNCHER)
+    message(STATUS "      Launcher:      ${CMAKE_C_COMPILER_LAUNCHER}")
+  endif()
 endif()
 message(STATUS "<<< Linker flags: >>>")
 message(STATUS "Executable name:  ${LAMMPS_BINARY}")
@@ -1047,15 +1111,15 @@ endif()
 if(BUILD_TOOLS)
   message(STATUS "<<< Building Tools >>>")
 endif()
-if(BUILD_LAMMPS_SHELL)
-  message(STATUS "<<< Building LAMMPS Shell >>>")
-endif()
 if(BUILD_LAMMPS_GUI)
-  message(STATUS "<<< Building LAMMPS GUI >>>")
+  message(STATUS "<<< Building LAMMPS-GUI >>>")
   if(LAMMPS_GUI_USE_PLUGIN)
     message(STATUS "Loading LAMMPS library as plugin at run time")
   else()
     message(STATUS "Linking LAMMPS library at compile time")
+  endif()
+  if(BUILD_WHAM)
+    message(STATUS "<<< Building WHAM >>>")
   endif()
 endif()
 if(ENABLE_TESTING)

@@ -174,6 +174,7 @@ void PairReaxFF::allocate()
   memory->create(cutsq,n+1,n+1,"pair:cutsq");
   memory->create(cutghost,n+1,n+1,"pair:cutghost");
   map = new int[n+1];
+  for (int i = 0; i <= n; ++i) map[i] = -1;
 
   chi = new double[n+1];
   eta = new double[n+1];
@@ -339,11 +340,13 @@ void PairReaxFF::init_style()
 
   auto acks2_fixes = modify->get_fix_by_style("^acks2/reax");
   int have_qeq = modify->get_fix_by_style("^qeq/reax").size()
-    + modify->get_fix_by_style("^qeq/shielded").size() + acks2_fixes.size();
+    + modify->get_fix_by_style("^qeq/shielded").size() + acks2_fixes.size()
+    + modify->get_fix_by_style("^qtpie/reax").size();
 
   if (qeqflag && (have_qeq != 1))
     error->all(FLERR,"Pair style reaxff requires use of exactly one of the "
-               "fix qeq/reaxff or fix qeq/shielded or fix acks2/reaxff commands");
+               "fix qeq/reaxff or fix qeq/shielded or fix acks2/reaxff or "
+	       "fix qtpie/reaxff commands");
 
   api->system->acks2_flag = acks2_fixes.size();
   if (api->system->acks2_flag)

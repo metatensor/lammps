@@ -193,6 +193,7 @@ accelerated styles exist.
 * :doc:`adapt <fix_adapt>` - change a simulation parameter over time
 * :doc:`adapt/fep <fix_adapt_fep>` - enhanced version of fix adapt
 * :doc:`addforce <fix_addforce>` - add a force to each atom
+* :doc:`add/heat <fix_add_heat>` - add a heat flux to each atom
 * :doc:`addtorque <fix_addtorque>` - add a torque to a group of atoms
 * :doc:`alchemy <fix_alchemy>` - perform an "alchemical transformation" between two partitions
 * :doc:`amoeba/bitorsion <fix_amoeba_bitorsion>` - torsion/torsion terms in AMOEBA force field
@@ -236,6 +237,7 @@ accelerated styles exist.
 * :doc:`dt/reset <fix_dt_reset>` - reset the timestep based on velocity, forces
 * :doc:`edpd/source <fix_dpd_source>` - add heat source to eDPD simulations
 * :doc:`efield <fix_efield>` - impose electric field on system
+* :doc:`efield/lepton <fix_efield_lepton>` - impose electric field on system using a Lepton expression for the potential
 * :doc:`efield/tip4p <fix_efield>` - impose electric field on system with TIP4P molecules
 * :doc:`ehex <fix_ehex>` - enhanced heat exchange algorithm
 * :doc:`electrode/conp <fix_electrode>` - impose electric potential
@@ -356,6 +358,7 @@ accelerated styles exist.
 * :doc:`python/move <fix_python_move>` - move particles using a Python function during a simulation run
 * :doc:`qbmsst <fix_qbmsst>` - quantum bath multi-scale shock technique time integrator
 * :doc:`qeq/comb <fix_qeq_comb>` - charge equilibration for COMB potential
+* :doc:`qeq/ctip <fix_qeq>` - charge equilibration for CTIP potential
 * :doc:`qeq/dynamic <fix_qeq>` - charge equilibration via dynamic method
 * :doc:`qeq/fire <fix_qeq>` - charge equilibration via FIRE minimizer
 * :doc:`qeq/point <fix_qeq>` - charge equilibration via point method
@@ -364,11 +367,17 @@ accelerated styles exist.
 * :doc:`qeq/slater <fix_qeq>` - charge equilibration via Slater method
 * :doc:`qmmm <fix_qmmm>` - functionality to enable a quantum mechanics/molecular mechanics coupling
 * :doc:`qtb <fix_qtb>` - implement quantum thermal bath scheme
+* :doc:`qtpie/reaxff <fix_qtpie_reaxff>` - apply QTPIE charge equilibration
 * :doc:`rattle <fix_shake>` - RATTLE constraints on bonds and/or angles
 * :doc:`reaxff/bonds <fix_reaxff_bonds>` - write out ReaxFF bond information
 * :doc:`reaxff/species <fix_reaxff_species>` - write out ReaxFF molecule information
 * :doc:`recenter <fix_recenter>` - constrain the center-of-mass position of a group of atoms
 * :doc:`restrain <fix_restrain>` - constrain a bond, angle, dihedral
+* :doc:`rheo <fix_rheo>` - integrator for the RHEO package
+* :doc:`rheo/thermal <fix_rheo_thermal>` - thermal integrator for the RHEO package
+* :doc:`rheo/oxidation <fix_rheo_oxidation>` - create oxidation bonds for the RHEO package
+* :doc:`rheo/pressure <fix_rheo_pressure>` - pressure calculation for the RHEO package
+* :doc:`rheo/viscosity <fix_rheo_pressure>` - viscosity calculation for the RHEO package
 * :doc:`rhok <fix_rhok>` - add bias potential for long-range ordered systems
 * :doc:`rigid <fix_rigid>` - constrain one or more clusters of atoms to move as a rigid body with NVE integration
 * :doc:`rigid/meso <fix_rigid_meso>` - constrain clusters of mesoscopic SPH/SDPD particles to move as a rigid body

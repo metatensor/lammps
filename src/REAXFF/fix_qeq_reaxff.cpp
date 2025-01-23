@@ -338,12 +338,13 @@ void FixQEqReaxFF::reallocate_storage()
 
 void FixQEqReaxFF::allocate_matrix()
 {
-  int i,ii,m;
+  int i,ii;
+  bigint m;
 
   int mincap;
   double safezone;
 
-  if (reaxflag) {
+  if (reaxflag && reaxff) {
     mincap = reaxff->api->system->mincap;
     safezone = reaxff->api->system->safezone;
   } else {
@@ -360,7 +361,10 @@ void FixQEqReaxFF::allocate_matrix()
     i = ilist[ii];
     m += numneigh[i];
   }
-  m_cap = MAX((int)(m * safezone), mincap * REAX_MIN_NBRS);
+  bigint m_cap_big = (bigint)MAX(m * safezone, mincap * REAX_MIN_NBRS);
+  if (m_cap_big > MAXSMALLINT)
+    error->one(FLERR,"Too many neighbors in fix {}",style);
+  m_cap = m_cap_big;
 
   H.n = n_cap;
   H.m = m_cap;
@@ -1154,7 +1158,7 @@ void FixQEqReaxFF::get_chi_field()
     for (int i = 0; i < nlocal; i++) {
       if (mask[i] & efgroupbit) {
         if (region && !region->match(x[i][0],x[i][1],x[i][2])) continue;
-        chi_field[i] = -efield->efield[i][3];
+        chi_field[i] = efield->efield[i][3];
       }
     }
   }

@@ -126,6 +126,7 @@ struct _liblammpsplugin {
   void (*python_finalize)();
 
   void (*error)(void *, int, const char *);
+  char *(*expand)(void *, const char *);
 
   void (*file)(void *, const char *);
   char *(*command)(void *, const char *);
@@ -144,11 +145,14 @@ struct _liblammpsplugin {
   int (*get_mpi_comm)(void *);
 
   int (*extract_setting)(void *, const char *);
-  int *(*extract_global_datatype)(void *, const char *);
+  int (*extract_global_datatype)(void *, const char *);
   void *(*extract_global)(void *, const char *);
-  void *(*map_atom)(void *, const void *);
+  int (*extract_pair_dimension)(void *, const char *);
+  void *(*extract_pair)(void *, const char *);
+  int (*map_atom)(void *, const void *);
 
-  int *(*extract_atom_datatype)(void *, const char *);
+  int (*extract_atom_datatype)(void *, const char *);
+  int (*extract_atom_size)(void *, const char *, int);
   void *(*extract_atom)(void *, const char *);
 
   void *(*extract_compute)(void *, const char *, int, int);
@@ -159,6 +163,7 @@ struct _liblammpsplugin {
   int (*set_string_variable)(void *, const char *, const char *);
   int (*set_internal_variable)(void *, const char *, double);
   int (*variable_info)(void *, int, char *, int);
+  double (*eval)(void *, const char *);
 
   void (*gather_atoms)(void *, const char *, int, int, void *);
   void (*gather_atoms_concat)(void *, const char *, int, int, void *);
@@ -201,6 +206,7 @@ struct _liblammpsplugin {
   int (*config_has_png_support)();
   int (*config_has_jpeg_support)();
   int (*config_has_ffmpeg_support)();
+  int (*config_has_curl_support)();
   int (*config_has_exceptions)();
 
   int (*config_has_package)(const char *);
