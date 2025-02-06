@@ -2128,7 +2128,7 @@ void Atom::add_molecule(int narg, char **arg)
   if (narg < 1) utils::missing_cmd_args(FLERR, "molecule", error);
 
   if (find_molecule(arg[0]) >= 0)
-    error->all(FLERR,"Reuse of molecule template ID {}", arg[0]);
+    error->all(FLERR, Error::ARGZERO, "Reuse of molecule template ID {}", arg[0]);
 
   // 1st molecule in set stores nset = # of mols, others store nset = 0
   // ifile = count of molecules in set

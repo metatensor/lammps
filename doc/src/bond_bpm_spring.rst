@@ -123,7 +123,7 @@ heuristic maximum strain used by typical non-bpm bond styles. Similar behavior
 to *break no* can also be attained by setting an arbitrarily high value of
 :math:`\epsilon_c`. One cannot use *break no* with *smooth yes*.
 
-.. versionadded:: TBD
+.. versionadded:: 4Feb2025
 
 The *volume/factor* keyword toggles whether an additional multibody
 contribution is added to he force using the formulation in

@@ -252,6 +252,8 @@
 /*rheo*.cpp
 /*rheo*.h
 
+/compute_gaussian_grid_local.cpp
+/compute_gaussian_grid_local.h
 /compute_grid.cpp
 /compute_grid.h
 /compute_grid_local.cpp
@@ -849,6 +851,8 @@
 /fix_ffl.h
 /fix_filter_corotate.cpp
 /fix_filter_corotate.h
+/fix_granular_mdr.cpp
+/fix_granular_mdr.h
 /fix_viscosity.cpp
 /fix_viscosity.h
 /fix_ehex.cpp
@@ -1277,6 +1281,10 @@
 /pair_hbond_dreiding_lj.h
 /pair_hbond_dreiding_morse.cpp
 /pair_hbond_dreiding_morse.h
+/pair_hbond_dreiding_lj_angleoffset.cpp
+/pair_hbond_dreiding_lj_angleoffset.h
+/pair_hbond_dreiding_morse_angleoffset.cpp
+/pair_hbond_dreiding_morse_angleoffset.h
 /pair_hdnnp.cpp
 /pair_hdnnp.h
 /pair_ilp_graphene_hbn.cpp

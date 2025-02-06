@@ -26,7 +26,7 @@ Examples
 Description
 """""""""""
 
-.. versionadded:: TBD
+.. versionadded:: 4Feb2025
 
 Style *dispersion/d3* computes the dispersion energy-correction used in
 the DFT-D3 method of Grimme :ref:`(Grimme1) <Grimme1>`.  It would

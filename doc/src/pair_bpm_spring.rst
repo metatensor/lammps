@@ -85,7 +85,7 @@ commands, or by mixing as described below:
 * :math:`r_c`           (distance units)
 * :math:`\gamma`        (force/velocity units)
 
-.. versionadded:: TBD
+.. versionadded:: 4Feb2025
 
 Additionally, if *anharmonic* is set to *yes*, a fourth coefficient
 must be provided:

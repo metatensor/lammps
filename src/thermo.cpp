@@ -87,7 +87,8 @@ static constexpr char YAML[] = "step temp ke pe ebond eangle edihed eimp evdwl e
 #define FORMAT_FLOAT_YAML_DEFAULT "%.15g"
 #define FORMAT_INT_YAML_DEFAULT "%d"
 
-#define FORMAT_MULTI_HEADER "------------ Step {:14} ----- CPU = {:12.7g} (sec) -------------"
+static constexpr char FORMAT_MULTI_HEADER[] =
+  "------------ Step {:14} ----- CPU = {:12.7g} (sec) -------------";
 
 enum { SCALAR, VECTOR, ARRAY };
 
@@ -176,6 +177,7 @@ Thermo::Thermo(LAMMPS *_lmp, int narg, char **arg) :
 Thermo::~Thermo()
 {
   delete[] style;
+  delete cache_mutex;
   deallocate();
 }
 
@@ -324,6 +326,7 @@ void Thermo::init()
   if (index_pe >= 0) pe = computes[index_pe];
 
   // create mutex to protect access to cached thermo data
+  delete cache_mutex;
   cache_mutex = new std::mutex;
 }
 

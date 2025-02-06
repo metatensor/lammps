@@ -20,7 +20,7 @@ import os
 import sys
 from ctypes import CDLL, POINTER, RTLD_GLOBAL, CFUNCTYPE, py_object, byref, cast, sizeof, \
   create_string_buffer, c_int, c_int32, c_int64, c_double, c_void_p, c_char_p, c_char,    \
-  pythonapi, pointer
+  pythonapi
 from os.path import dirname, abspath, join
 from inspect import getsourcefile
 
@@ -421,6 +421,10 @@ class lammps(object):
     self.lib.lammps_extract_variable.argtypes = [c_void_p, c_char_p, c_char_p]
     self.lib.lammps_extract_variable_datatype.argtypes = [c_void_p, c_char_p]
     self.lib.lammps_extract_variable_datatype.restype = c_int
+
+    self.lib.lammps_clearstep_compute.argtype = [c_void_p]
+    self.lib.lammps_addstep_compute.argtype = [c_void_p, c_void_p]
+    self.lib.lammps_addstep_compute_all.argtype = [c_void_p, c_void_p]
 
     self.lib.lammps_eval.argtypes = [c_void_p, c_char_p]
     self.lib.lammps_eval.restype = c_double
@@ -893,9 +897,8 @@ class lammps(object):
     box_change = c_int()
 
     with ExceptionCheck(self):
-      self.lib.lammps_extract_box(self.lmp,boxlo,boxhi,
-                                  byref(xy),byref(yz),byref(xz),
-                                  periodicity,byref(box_change))
+      self.lib.lammps_extract_box(self.lmp, boxlo, boxhi, byref(xy), byref(yz), byref(xz),
+                                  periodicity, byref(box_change))
 
     boxlo = boxlo[:3]
     boxhi = boxhi[:3]
@@ -1231,7 +1234,7 @@ class lammps(object):
     """
 
     tag = self.c_tagint(id)
-    return self.lib.lammps_map_atom(self.lmp, pointer(tag))
+    return self.lib.lammps_map_atom(self.lmp, byref(tag))
 
   # -------------------------------------------------------------------------
   # extract per-atom info datatype
@@ -1594,6 +1597,26 @@ class lammps(object):
 
   # -------------------------------------------------------------------------
 
+  def clearstep_compute(self, nextstep):
+    with ExceptionCheck(self):
+      return self.lib.lammps_clearstep_compute(self.lmp)
+
+  # -------------------------------------------------------------------------
+
+  def addstep_compute(self, nextstep):
+    with ExceptionCheck(self):
+      nextstep = self.c_bigint(nextstep)
+      return self.lib.lammps_addstep_compute(self.lmp, byref(nextstep))
+
+  # -------------------------------------------------------------------------
+
+  def addstep_compute_all(self, nextstep):
+    with ExceptionCheck(self):
+      nextstep = self.c_bigint(nextstep)
+      return self.lib.lammps_addstep_compute_all(self.lmp, byref(nextstep))
+
+  # -------------------------------------------------------------------------
+
   def flush_buffers(self):
     """Flush output buffers
 
@@ -1677,7 +1700,7 @@ class lammps(object):
   def eval(self, expr):
     """ Evaluate a LAMMPS immediate variable expression
 
-    .. versionadded:: TBD
+    .. versionadded:: 4Feb2025
 
     This function is a wrapper around the function :cpp:func:`lammps_eval`
     of the C library interface.  It evaluates and expression like in
@@ -1694,7 +1717,6 @@ class lammps(object):
 
     with ExceptionCheck(self):
       return self.lib.lammps_eval(self.lmp, newexpr)
-    return None
 
   # -------------------------------------------------------------------------
 
@@ -1981,7 +2003,7 @@ class lammps(object):
     """
 
     flags = (c_int*3)()
-    self.lib.lammps_decode_image_flags(image,byref(flags))
+    self.lib.lammps_decode_image_flags(image, byref(flags))
 
     return [int(i) for i in flags]
 
@@ -2676,7 +2698,8 @@ class lammps(object):
     c_iatom = c_int()
     c_numneigh = c_int()
     c_neighbors = POINTER(c_int)()
-    self.lib.lammps_neighlist_element_neighbors(self.lmp, idx, element, byref(c_iatom), byref(c_numneigh), byref(c_neighbors))
+    self.lib.lammps_neighlist_element_neighbors(self.lmp, idx, element, byref(c_iatom),
+                                                byref(c_numneigh), byref(c_neighbors))
     return c_iatom.value, c_numneigh.value, c_neighbors
 
   # -------------------------------------------------------------------------
