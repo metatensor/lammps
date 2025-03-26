@@ -7,9 +7,9 @@ endif()
 if (BUILD_OMP AND APPLE)
     message(FATAL_ERROR
         "Can not enable both BUILD_OMP and PGK_ML-METATENSOR on Apple systems, "
-        "since this results in two different versions of libiomp5.dylib (one "
+        "since this results in two different versions of the OpenMP library (one "
         "from the system and one from Torch) being linked to the final "
-        "executable, which then segfaults"
+        "executable, which then crashes"
     )
 endif()
 
@@ -41,28 +41,42 @@ endif()
 
 ########### definition of metatensor and metatensor-torch targets ###########
 
-include(FetchContent)
-
-set(URL_BASE "https://github.com/lab-cosmo/metatensor/releases/download")
-
 set(METATENSOR_CORE_VERSION "0.1.12")
-FetchContent_Declare(metatensor
-    URL ${URL_BASE}/metatensor-core-v${METATENSOR_CORE_VERSION}/metatensor-core-cxx-${METATENSOR_CORE_VERSION}.tar.gz
-    URL_HASH SHA1=aec0963624f7fcd470e71471eb22b8912aec912e
-)
-
-message(STATUS "Fetching metatensor v${METATENSOR_CORE_VERSION} from github")
-FetchContent_MakeAvailable(metatensor)
-
-
 set(METATENSOR_TORCH_VERSION "0.7.3")
-FetchContent_Declare(metatensor-torch
-    URL ${URL_BASE}/metatensor-torch-v${METATENSOR_TORCH_VERSION}/metatensor-torch-cxx-${METATENSOR_TORCH_VERSION}.tar.gz
-    URL_HASH SHA1=26f989650d29008ab640aa6bdea706f88adc4fba
-)
 
-message(STATUS "Fetching metatensor-torch v${METATENSOR_TORCH_VERSION} from github")
-FetchContent_MakeAvailable(metatensor-torch)
+set(DOWNLOAD_METATENSOR_DEFAULT ON)
+find_package(metatensor_torch QUIET ${METATENSOR_TORCH_VERSION})
+if (metatensor_torch_FOUND)
+    set(DOWNLOAD_METATENSOR_DEFAULT OFF)
+endif()
+
+
+option(DOWNLOAD_METATENSOR "Download metatensor package instead of using an already installed one" ${DOWNLOAD_METATENSOR_DEFAULT})
+
+if (DOWNLOAD_METATENSOR)
+    include(FetchContent)
+
+    set(URL_BASE "https://github.com/lab-cosmo/metatensor/releases/download")
+
+    FetchContent_Declare(metatensor
+        URL ${URL_BASE}/metatensor-core-v${METATENSOR_CORE_VERSION}/metatensor-core-cxx-${METATENSOR_CORE_VERSION}.tar.gz
+        URL_HASH SHA1=aec0963624f7fcd470e71471eb22b8912aec912e
+    )
+
+    message(STATUS "Fetching metatensor v${METATENSOR_CORE_VERSION} from github")
+    FetchContent_MakeAvailable(metatensor)
+
+    FetchContent_Declare(metatensor-torch
+        URL ${URL_BASE}/metatensor-torch-v${METATENSOR_TORCH_VERSION}/metatensor-torch-cxx-${METATENSOR_TORCH_VERSION}.tar.gz
+        URL_HASH SHA1=26f989650d29008ab640aa6bdea706f88adc4fba
+    )
+
+    message(STATUS "Fetching metatensor-torch v${METATENSOR_TORCH_VERSION} from github")
+    FetchContent_MakeAvailable(metatensor-torch)
+else()
+    # make sure to fail the configuration if cmake can not find metatensor-torch
+    find_package(metatensor_torch REQUIRED ${METATENSOR_TORCH_VERSION})
+endif()
 
 
 ################ lammps target modifications ################
