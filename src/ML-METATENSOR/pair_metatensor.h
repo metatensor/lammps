@@ -21,6 +21,15 @@ PairStyle(metatensor, PairMetatensor);
 
 #include "pair.h"
 
+#include <vector>
+
+// this is the actual namespace where `torch::Device` is defined
+namespace c10 {
+    class Device;
+
+    enum class DeviceType: int8_t;
+}
+
 namespace LAMMPS_NS {
 class MetatensorSystemAdaptor;
 struct PairMetatensorData;
@@ -38,12 +47,23 @@ public:
     void init_list(int id, NeighList *ptr) override;
 
     void allocate();
-private:
+
+protected:
+    // get the set of devices both available on the current machine and supported
+    // by the model
+    std::vector<c10::DeviceType> available_devices();
+
+    // pick the correct device to use from the user request (or nullptr) in
+    // `pair_style metatensor`
+    virtual void pick_device(c10::Device* device, const char* requested);
+
     PairMetatensorData* mts_data;
     NeighList *mts_list;
 
     // mapping from LAMMPS types to metatensor types
     int32_t *type_mapping;
+    // adaptor from LAMMPS system to metatensor's
+    std::unique_ptr<MetatensorSystemAdaptor> system_adaptor;
 };
 
 }    // namespace LAMMPS_NS
