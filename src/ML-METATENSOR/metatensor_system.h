@@ -28,8 +28,9 @@
 namespace LAMMPS_NS {
 
 struct MetatensorSystemOptions {
-    // Mapping from LAMMPS types to metatensor types
-    const int32_t* types_mapping;
+    // Mapping from LAMMPS types to metatensor types.
+    // If used with kokkos, this should be a device pointer
+    int32_t* types_mapping;
     // interaction range of the model, in LAMMPS units
     double interaction_range;
     // should we run extra checks on the neighbor lists?
@@ -79,12 +80,12 @@ class MetatensorSystemAdaptor : public Pointers {
 public:
     MetatensorSystemAdaptor(LAMMPS *lmp, MetatensorSystemOptions options);
 
-    ~MetatensorSystemAdaptor();
+    virtual ~MetatensorSystemAdaptor();
 
     void add_nl_request(double cutoff, metatensor_torch::NeighborListOptions request);
 
     // Create a metatensor system matching the LAMMPS system data
-    metatensor_torch::System system_from_lmp(
+    virtual metatensor_torch::System system_from_lmp(
         NeighList* list,
         bool do_virial,
         bool remap_pairs,
@@ -99,7 +100,7 @@ public:
     // conversion) to access its gradient
     torch::Tensor positions;
 
- private:
+ protected:
     // setup the metatensor neighbors list from the internal LAMMPS one,
     // remapping periodic ghosts to the corresponding local atom
     void setup_neighbors_remap(metatensor_torch::System& system, NeighList* list);

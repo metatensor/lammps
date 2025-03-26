@@ -293,7 +293,7 @@ void MetatensorSystemAdaptor::setup_neighbors_remap(metatensor_torch::System& sy
 
         torch::intrusive_ptr<metatensor_torch::LabelsHolder> samples;
         {
-            auto _ = MetatensorTimer("creating samples Labels (" +  std::to_string(n_pairs) +" pairs)");
+            auto _ = MetatensorTimer("creating samples Labels (" +  std::to_string(n_pairs) + " pairs)");
             samples = torch::make_intrusive<metatensor_torch::LabelsHolder>(
                 std::vector<std::string>{"first_atom", "second_atom", "cell_shift_a", "cell_shift_b", "cell_shift_c"},
                 samples_values
@@ -349,7 +349,6 @@ void MetatensorSystemAdaptor::setup_neighbors_no_remap(metatensor_torch::System&
     auto device = system->positions().device();
 
     double** x = atom->x;
-    auto total_n_atoms = atom->nlocal + atom->nghost;
 
     for (auto& cache: caches_) {
         {

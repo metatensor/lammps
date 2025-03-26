@@ -3,6 +3,8 @@
 pair_style metatensor command
 =============================
 
+Accelerator Variants: *metatensor/kk*
+
 Syntax
 """"""
 

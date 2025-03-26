@@ -15,6 +15,7 @@
    Contributing authors: Guillaume Fraux <guillaume.fraux@epfl.ch>
 ------------------------------------------------------------------------- */
 #include "pair_metatensor.h"
+#include "metatensor_types.h"
 
 #include "atom.h"
 #include "error.h"
@@ -22,7 +23,6 @@
 #include "memory.h"
 #include "neighbor.h"
 #include "update.h"
-#include "citeme.h"
 #include "comm.h"
 
 #include "neigh_list.h"
@@ -47,113 +47,11 @@
 
 using namespace LAMMPS_NS;
 
-struct LAMMPS_NS::PairMetatensorData {
-    PairMetatensorData(std::string length_unit, std::string energy_unit);
-
-    void load_model(LAMMPS* lmp, const char* path, const char* extensions_directory);
-
-    // torch model in metatensor format
-    std::unique_ptr<torch::jit::Module> model;
-    // device to use for the calculations
-    torch::Device device;
-    // model capabilities, declared by the model
-    metatensor_torch::ModelCapabilities capabilities;
-    // run-time evaluation options, decided by this class
-    metatensor_torch::ModelEvaluationOptions evaluation_options;
-    // should metatensor check the data LAMMPS send to the model
-    // and the data the model returns?
-    bool check_consistency;
-    // whether pairs should be remapped, removing pairs between ghosts if there
-    // is an equivalent pair involving at least one local atom.
-    bool remap_pairs;
-    // how far away the model needs to know about neighbors
-    double max_cutoff;
-
-    // allocation cache for the selected atoms
-    torch::Tensor selected_atoms_values;
-    // adaptor from LAMMPS system to metatensor's
-    std::unique_ptr<MetatensorSystemAdaptor> system_adaptor;
-};
-
-PairMetatensorData::PairMetatensorData(std::string length_unit, std::string energy_unit):
-    system_adaptor(nullptr),
-    device(torch::kCPU),
-    check_consistency(false),
-    remap_pairs(true),
-    max_cutoff(-1)
+PairMetatensor::PairMetatensor(LAMMPS *lmp):
+    Pair(lmp),
+    type_mapping(nullptr),
+    system_adaptor(nullptr)
 {
-    auto options = torch::TensorOptions().dtype(torch::kInt32);
-    this->selected_atoms_values = torch::zeros({0, 2}, options);
-
-    // Initialize evaluation_options
-    this->evaluation_options = torch::make_intrusive<metatensor_torch::ModelEvaluationOptionsHolder>();
-    this->evaluation_options->set_length_unit(std::move(length_unit));
-
-    auto output = torch::make_intrusive<metatensor_torch::ModelOutputHolder>();
-    output->explicit_gradients = {};
-    output->set_quantity("energy");
-    output->set_unit(std::move(energy_unit));
-    output->per_atom = false;
-
-    this->evaluation_options->outputs.insert("energy", output);
-}
-
-void PairMetatensorData::load_model(
-    LAMMPS* lmp,
-    const char* path,
-    const char* extensions_directory
-) {
-    // TODO: seach for the model & extensions inside `$LAMMPS_POTENTIALS`?
-
-    if (this->model != nullptr) {
-        lmp->error->all(FLERR, "torch model is already loaded");
-    }
-
-    torch::optional<std::string> extensions = torch::nullopt;
-    if (extensions_directory != nullptr) {
-        extensions = std::string(extensions_directory);
-    }
-
-    try {
-        this->model = std::make_unique<torch::jit::Module>(
-            metatensor_torch::load_atomistic_model(path, extensions)
-        );
-    } catch (const c10::Error& e) {
-        lmp->error->all(FLERR, "failed to load metatensor model at '{}': {}", path, e.what());
-    }
-
-    auto capabilities_ivalue = this->model->run_method("capabilities");
-    this->capabilities = capabilities_ivalue.toCustomClass<metatensor_torch::ModelCapabilitiesHolder>();
-
-    if (!this->capabilities->outputs().contains("energy")) {
-        lmp->error->all(FLERR, "the model at '{}' does not have an \"energy\" output, we can not use it in pair_style metatensor", path);
-    }
-
-    if (lmp->comm->me == 0) {
-        auto metadata_ivalue = this->model->run_method("metadata");
-        auto metadata = metadata_ivalue.toCustomClass<metatensor_torch::ModelMetadataHolder>();
-        auto to_print = metadata->print();
-
-        if (lmp->screen) {
-            fprintf(lmp->screen, "\n%s\n", to_print.c_str());
-        }
-        if (lmp->logfile) {
-            fprintf(lmp->logfile,"\n%s\n", to_print.c_str());
-        }
-
-        // add the model references to LAMMPS citation handling mechanism
-        for (const auto& it: metadata->references) {
-            for (const auto& ref: it.value()) {
-                lmp->citeme->add(ref + "\n");
-            }
-        }
-    }
-}
-
-
-/* ---------------------------------------------------------------------- */
-
-PairMetatensor::PairMetatensor(LAMMPS *lmp): Pair(lmp), type_mapping(nullptr) {
     std::string energy_unit;
     std::string length_unit;
     if (strcmp(update->unit_style, "real") == 0) {
@@ -246,90 +144,16 @@ void PairMetatensor::settings(int argc, char ** argv) {
         }
     }
 
+    // load the model and get it's capabilities (including supported devices)
     mts_data->load_model(this->lmp, model_path, extensions_directory);
 
     // Select the device to use based on the model's preference, the user choice
     // and what's available.
-    auto available_devices = std::vector<torch::Device>();
-    for (const auto& device: mts_data->capabilities->supported_devices) {
-        if (device == "cpu") {
-            available_devices.push_back(torch::kCPU);
-        } else if (device == "cuda") {
-            if (torch::cuda::is_available()) {
-                // Get a MPI communicator for all processes on the current node
-                MPI_Comm local;
-                MPI_Comm_split_type(world, MPI_COMM_TYPE_SHARED, 0, MPI_INFO_NULL, &local);
-                // Get the rank of this MPI process on the current node
-                int local_rank;
-                MPI_Comm_rank(local, &local_rank);
+    this->pick_device(&mts_data->device, requested_device);
 
-                int size;
-                MPI_Comm_size(local, &size);
-                if (size < torch::cuda::device_count()) {
-                    if (comm->me == 0) {
-                        error->warning(FLERR,
-                            "found {} CUDA-capable GPUs, but only {} MPI processes on the current node; the remaining GPUs will not be used",
-                            torch::cuda::device_count(), size
-                        );
-                    }
-                }
-
-                // split GPUs between node-local processes using round-robin allocation
-                int gpu_to_use = local_rank % torch::cuda::device_count();
-                available_devices.push_back(torch::Device(torch::kCUDA, gpu_to_use));
-            }
-        } else if (device == "mps") {
-            #if TORCH_VERSION_MAJOR >= 2
-            if (torch::mps::is_available()) {
-                available_devices.push_back(torch::Device("mps"));
-            }
-            #endif
-        } else {
-            error->warning(FLERR,
-                "the model declared support for unknown device '{}', it will be ignored", device
-            );
-        }
-    }
-
-    if (available_devices.empty()) {
-        error->all(FLERR,
-            "failed to find a valid device for the model at '{}': "
-            "the model supports {}, none of these where available",
-            model_path, torch::str(mts_data->capabilities->supported_devices)
-        );
-    }
-
-    if (requested_device == nullptr) {
-        // no user request, pick the device the model prefers
-        mts_data->device = available_devices[0];
-    } else {
-        bool found_requested_device = false;
-        for (const auto& device: available_devices) {
-            if (device.is_cpu() && strcmp(requested_device, "cpu") == 0) {
-                mts_data->device = device;
-                found_requested_device = true;
-                break;
-            } else if (device.is_cuda() && strcmp(requested_device, "cuda") == 0) {
-                mts_data->device = device;
-                found_requested_device = true;
-                break;
-            } else if (device.is_mps() && strcmp(requested_device, "mps") == 0) {
-                mts_data->device = device;
-                found_requested_device = true;
-                break;
-            }
-        }
-
-        if (!found_requested_device) {
-            error->all(FLERR,
-                "failed to find requested device ({}): it is either "
-                "not supported by this model or not available on this machine",
-                requested_device
-            );
-        }
-    }
-
+    // move all data to the correct device
     mts_data->model->to(mts_data->device);
+    mts_data->selected_atoms_values = mts_data->selected_atoms_values.to(mts_data->device);
 
     auto message = "Running simulation on " + mts_data->device.str() + " device with " + mts_data->capabilities->dtype() + " data";
     if (screen) {
@@ -341,6 +165,100 @@ void PairMetatensor::settings(int argc, char ** argv) {
 
     if (!allocated) {
         allocate();
+    }
+}
+
+std::vector<torch::DeviceType> PairMetatensor::available_devices() {
+    auto devices = std::vector<torch::DeviceType>();
+    for (const auto& supported: this->mts_data->capabilities->supported_devices) {
+        if (supported == "cpu") {
+            devices.push_back(torch::kCPU);
+        } else if (supported == "cuda" && torch::cuda::is_available()) {
+            devices.push_back(torch::kCUDA);
+        } else if (supported == "mps") {
+            #if TORCH_VERSION_MAJOR >= 2
+            if (torch::mps::is_available()) {
+                devices.push_back(torch::kMPS);
+            }
+            #endif
+        } else {
+            error->warning(FLERR,
+                "the model declared support for unknown device '{}', it will be ignored", supported
+            );
+        }
+    }
+
+    if (devices.empty()) {
+        error->all(FLERR,
+            "failed to find a valid device for this model: "
+            "the model supports {}, none of these where available",
+            torch::str(this->mts_data->capabilities->supported_devices)
+        );
+    }
+
+    return devices;
+}
+
+void PairMetatensor::pick_device(torch::Device* device, const char* requested) {
+    auto available_devices = this->available_devices();
+
+    auto picked_device_type = torch::kCPU;
+    if (requested == nullptr) {
+        // no user request, pick the device the model prefers
+        picked_device_type = available_devices[0];
+    } else {
+        bool found_requested_device = false;
+        for (const auto& device_type: available_devices) {
+            if (device_type == torch::kCPU && strcmp(requested, "cpu") == 0) {
+                picked_device_type = device_type;
+                found_requested_device = true;
+                break;
+            } else if (device_type == torch::kCUDA && strcmp(requested, "cuda") == 0) {
+                picked_device_type = device_type;
+                found_requested_device = true;
+                break;
+            } else if (device_type == torch::kMPS && strcmp(requested, "mps") == 0) {
+                picked_device_type = device_type;
+                found_requested_device = true;
+                break;
+            }
+        }
+
+        if (!found_requested_device) {
+            error->all(FLERR,
+                "failed to find requested device ({}): it is either "
+                "not supported by this model or not available on this machine",
+                requested
+            );
+        }
+    }
+
+    if (picked_device_type == torch::kCUDA) {
+        // distribute GPUs between multiple MPI processes on the same node
+
+        // (1) get a MPI communicator for all processes on the current node
+        MPI_Comm local;
+        MPI_Comm_split_type(world, MPI_COMM_TYPE_SHARED, 0, MPI_INFO_NULL, &local);
+        // (2) get the rank of this MPI process on the current node
+        int local_rank;
+        MPI_Comm_rank(local, &local_rank);
+
+        int size;
+        MPI_Comm_size(local, &size);
+        if (size < torch::cuda::device_count()) {
+            if (comm->me == 0) {
+                error->warning(FLERR,
+                    "found {} CUDA-capable GPUs, but only {} MPI processes on the current node; the remaining GPUs will not be used",
+                    torch::cuda::device_count(), size
+                );
+            }
+        }
+
+        // (3) split GPUs between node-local processes using round-robin allocation
+        int gpu_to_use = local_rank % torch::cuda::device_count();
+        *device = torch::Device(picked_device_type, gpu_to_use);
+    } else {
+        *device = torch::Device(picked_device_type);
     }
 }
 
@@ -463,7 +381,7 @@ void PairMetatensor::init_style() {
         mts_data->max_cutoff,
         mts_data->check_consistency,
     };
-    mts_data->system_adaptor = std::make_unique<MetatensorSystemAdaptor>(lmp, options);
+    this->system_adaptor = std::make_unique<MetatensorSystemAdaptor>(lmp, options);
 
     // We ask LAMMPS for a full neighbor lists because we need to know about
     // ALL pairs, even if options->full_list() is false. We will then filter
@@ -479,7 +397,7 @@ void PairMetatensor::init_style() {
         auto cutoff = options->engine_cutoff(mts_data->evaluation_options->length_unit());
         assert(cutoff <= mts_data->max_cutoff);
 
-        mts_data->system_adaptor->add_nl_request(cutoff, options);
+        this->system_adaptor->add_nl_request(cutoff, options);
     }
 }
 
@@ -520,7 +438,7 @@ void PairMetatensor::compute(int eflag, int vflag) {
     }
 
     // transform from LAMMPS to metatensor System
-    auto system = mts_data->system_adaptor->system_from_lmp(
+    auto system = this->system_adaptor->system_from_lmp(
         mts_list,
         static_cast<bool>(vflag_global),
         mts_data->remap_pairs,
@@ -530,14 +448,17 @@ void PairMetatensor::compute(int eflag, int vflag) {
 
     // only run the calculation for atoms actually in the current domain
     mts_data->selected_atoms_values.resize_({atom->nlocal, 2});
-    for (int i=0; i<atom->nlocal; i++) {
-        mts_data->selected_atoms_values[i][0] = 0;
-        mts_data->selected_atoms_values[i][1] = i;
-    }
+    mts_data->selected_atoms_values.index_put_({torch::indexing::Slice(), 0}, 0);
+    auto options = mts_data->selected_atoms_values.options();
+    mts_data->selected_atoms_values.index_put_(
+        {torch::indexing::Slice(), 1},
+        torch::arange(atom->nlocal, options)
+    );
+
     auto selected_atoms = torch::make_intrusive<metatensor_torch::LabelsHolder>(
         std::vector<std::string>{"system", "atom"}, mts_data->selected_atoms_values
     );
-    mts_data->evaluation_options->set_selected_atoms(selected_atoms->to(mts_data->device));
+    mts_data->evaluation_options->set_selected_atoms(selected_atoms);
 
     torch::IValue result_ivalue;
     try {
@@ -556,20 +477,18 @@ void PairMetatensor::compute(int eflag, int vflag) {
     auto energy_block = metatensor_torch::TensorMapHolder::block_by_id(energy, 0);
     auto energy_tensor = energy_block->values();
 
-    // reset gradients to zero before calling backward
-    mts_data->system_adaptor->positions.mutable_grad() = torch::Tensor();
-    mts_data->system_adaptor->strain.mutable_grad() = torch::Tensor();
-
     // compute forces/virial on device with backward propagation
     {
+        // reset gradients to zero before calling backward
+        this->system_adaptor->positions.mutable_grad() = torch::Tensor();
+        this->system_adaptor->strain.mutable_grad() = torch::Tensor();
+
         auto _ = MetatensorTimer("running Model::backward");
         energy_tensor.backward(-torch::ones_like(energy_tensor));
     }
 
     {
         auto _ = MetatensorTimer("storing model output in LAMMPS data structures");
-
-        auto forces_tensor = mts_data->system_adaptor->positions.grad();
 
         // move results to cpu for storing
         auto energy_detached = energy_tensor.detach().to(torch::kCPU).to(torch::kFloat64);
@@ -613,6 +532,7 @@ void PairMetatensor::compute(int eflag, int vflag) {
         }
 
         // store forces/virial
+        auto forces_tensor = this->system_adaptor->positions.grad();
         assert(forces_tensor.is_cpu() && forces_tensor.scalar_type() == torch::kFloat64);
 
         auto forces = forces_tensor.accessor<double, 2>();
@@ -625,7 +545,7 @@ void PairMetatensor::compute(int eflag, int vflag) {
         assert(!vflag_fdotr);
 
         if (vflag_global) {
-            auto virial_tensor = mts_data->system_adaptor->strain.grad();
+            auto virial_tensor = this->system_adaptor->strain.grad();
             assert(virial_tensor.is_cpu() && virial_tensor.scalar_type() == torch::kFloat64);
             auto predicted_virial = virial_tensor.accessor<double, 2>();
 

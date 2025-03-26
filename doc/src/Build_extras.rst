@@ -1143,6 +1143,17 @@ https://pytorch.org/get-started/locally/.
          make yes-metatensor
          make <machine>
 
+   .. tab:: Metatensor and Kokkos
+
+      The metatensor-kokkos interface should be compiled as
+
+      .. code-block:: bash
+
+         cmake ../cmake/ -DPKG_KOKKOS=ON -DKokkos_ENABLE_CUDA=ON -DPKG_ML-METATENSOR=ON -DCMAKE_PREFIX_PATH=/.../libtorch/share/cmake/
+         
+      where ``/.../libtorch/`` is the path to a libtorch C++11 ABI distribution (which can be downloaded from https://pytorch.org/get-started/locally/).
+      The OpenMP version (as opposed to the CUDA version) can be enabled with -DKokkos_ENABLE_OPENMP=ON instead of -DKokkos_ENABLE_CUDA=ON
+
 ----------
 
 .. _opt:
