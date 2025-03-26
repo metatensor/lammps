@@ -1120,6 +1120,13 @@ https://pytorch.org/get-started/locally/.
 
          -DPKG_ML-METATENSOR=ON
          -DCMAKE_PREFIX_PATH="$TORCH_PREFIX"
+         -DLAMMPS_INSTALL_RPATH=ON
+
+      By default, this code will try to find the metatensor libraries on your
+      system and use them. If cmake can not find the libraries, it will download
+      and build them as part of the main LAMMPS build. If you want, you can
+      control this behavior using `-DDOWNLOAD_METATENSOR=ON` to always force a
+      download and `-DDOWNLOAD_METATENSOR=OFF` to prevent any download.
 
    .. tab:: Traditional make
 
