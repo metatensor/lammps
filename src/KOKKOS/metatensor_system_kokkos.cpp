@@ -188,7 +188,7 @@ void MetatensorSystemAdaptorKokkos<DeviceType>::setup_neighbors_remap_kk(metaten
             // half list mask, if necessary
             auto full_list = cache.options->full_list();
 
-            if (!full_list) {
+            if (full_list) {
                 centers_id_cur = centers_id;
                 neighbors_id_cur = neighbors_id;
                 centers_original_id_cur = centers_original_id;
