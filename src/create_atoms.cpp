@@ -34,6 +34,7 @@
 #include "random_mars.h"
 #include "random_park.h"
 #include "region.h"
+#include "safe_pointers.h"
 #include "special.h"
 #include "text_file_reader.h"
 #include "variable.h"
@@ -72,7 +73,7 @@ CreateAtoms::CreateAtoms(LAMMPS *lmp) : Command(lmp), basistype(nullptr) {}
 void CreateAtoms::command(int narg, char **arg)
 {
   if (domain->box_exist == 0)
-    error->all(FLERR, "Create_atoms command before simulation box is defined");
+    error->all(FLERR, "Create_atoms command before simulation box is defined" + utils::errorurl(33));
   if (modify->nfix_restart_peratom)
     error->all(FLERR, "Cannot create_atoms after reading restart file with per-atom info");
 
@@ -1082,8 +1083,9 @@ void CreateAtoms::add_mesh(const char *filename)
     molid = maxmol + 1;
   }
 
-  FILE *fp = fopen(filename, "rb");
-  if (fp == nullptr) error->one(FLERR, "Cannot open file {}: {}", filename, utils::getsyserror());
+  SafeFilePtr fp = fopen(filename, "rb");
+  if (fp == nullptr)
+    error->one(FLERR, "Cannot open STL mesh file {}: {}", filename, utils::getsyserror());
 
   // first try reading the file in ASCII format
 
@@ -1184,7 +1186,7 @@ void CreateAtoms::add_mesh(const char *filename)
         }
       }
     } else {
-      error->all(FLERR, "Error reading triangles from file {}: {}", filename, e.what());
+      error->all(FLERR, "Error reading triangles from STL mesh file {}: {}", filename, e.what());
     }
   }
 
@@ -1195,7 +1197,6 @@ void CreateAtoms::add_mesh(const char *filename)
       utils::logmesg(lmp, "  read {} triangles with {:.2f} atoms per triangle added in {} mode\n",
                      ntriangle, ratio, mesh_name[mesh_style]);
   }
-  if (fp) fclose(fp);
 }
 
 /* ----------------------------------------------------------------------

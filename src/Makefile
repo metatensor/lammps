@@ -1,7 +1,7 @@
 # LAMMPS multiple-machine -*- Makefile -*-
 
 SHELL = /bin/bash
-PYTHON = python
+PYTHON = $(word 3,$(shell type python3))
 DYN_LIB = -ldl
 
 #.IGNORE:
@@ -279,7 +279,6 @@ LIBDIR = $(@:lib-%=%)
 # List of all targets
 
 help:
-	@echo ''
 	@echo 'make clean-all           delete all object files'
 	@echo 'make clean-machine       delete object files for one machine'
 	@echo 'make mpi-stubs           build dummy MPI library in STUBS'
@@ -521,13 +520,11 @@ check-docs:
 check-version:
 	$(PYTHON) ../tools/coding_standard/versiontags.py .. || echo
 
-
 format-src:
 	clang-format -i --verbose --style=file *.cpp *.h */*.cpp */*.h
 
 format-tests:
 	clang-format -i --verbose --style=file ../unittest/*/*.cpp ../unittest/*/*.h
-
 
 # Package management
 

@@ -965,6 +965,7 @@ void FixReaxFFSpecies::DeleteSpecies(int Nmole, int Nspec)
   int *mask = atom->mask;
   double *mass = atom->mass;
   double *rmass = atom->rmass;
+  int *type = atom->type;
   double localmass, totalmass;
   std::string species_str;
 
@@ -1013,12 +1014,12 @@ void FixReaxFFSpecies::DeleteSpecies(int Nmole, int Nspec)
       if (!(mask[i] & groupbit)) continue;
       cid = nint(clusterID[i]);
       if (cid == m) {
-        itype = ele2uele[atom->type[i] - 1];
+        itype = ele2uele[type[i] - 1];
         Name[itype]++;
         count++;
         marklist[nmarklist++] = i;
         if (rmass) localmass += rmass[i];
-        else localmass += atom->mass[atom->type[i]];
+        else localmass += mass[type[i]];
       }
     }
 

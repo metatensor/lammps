@@ -18,8 +18,10 @@
 #include "comm.h"
 #include "error.h"
 #include "force.h"
+#include "info.h"
 #include "memory.h"
 #include "neighbor.h"
+#include "safe_pointers.h"
 #include "suffix.h"
 #include "update.h"
 
@@ -79,9 +81,13 @@ Bond::~Bond()
 
 void Bond::init()
 {
-  if (!allocated && atom->nbondtypes) error->all(FLERR, "Bond coeffs are not set");
+  if (!allocated && atom->nbondtypes)
+    error->all(FLERR, Error::NOLASTLINE,
+               "Bond coeffs are not set. Status:\n" + Info::get_bond_coeff_status(lmp));
   for (int i = 1; i <= atom->nbondtypes; i++)
-    if (setflag[i] == 0) error->all(FLERR, "All bond coeffs are not set");
+    if (setflag[i] == 0)
+      error->all(FLERR, Error::NOLASTLINE,
+                 "All bond coeffs are not set. Status:\n" + Info::get_bond_coeff_status(lmp));
   init_style();
 }
 
@@ -365,7 +371,7 @@ void Bond::write_file(int narg, char **arg)
   // add line with DATE: and UNITS: tag when creating new file
   // print header in format used by bond_style table
 
-  FILE *fp = nullptr;
+  SafeFilePtr fp;
   if (comm->me == 0) {
     std::string table_file = arg[4];
 
@@ -419,7 +425,6 @@ void Bond::write_file(int narg, char **arg)
       e = single(btype, r * r, itype, jtype, f);
       fprintf(fp, "%8d %- 22.15g %- 22.15g %- 22.15g\n", i + 1, r, e, f * r);
     }
-    fclose(fp);
   }
 }
 

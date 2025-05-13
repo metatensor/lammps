@@ -17,7 +17,6 @@
 from __future__ import print_function
 
 import os
-import sys
 from ctypes import CDLL, POINTER, RTLD_GLOBAL, CFUNCTYPE, py_object, byref, cast, sizeof, \
   create_string_buffer, c_int, c_int32, c_int64, c_double, c_void_p, c_char_p, c_char,    \
   pythonapi
@@ -30,7 +29,7 @@ from lammps.constants import LAMMPS_AUTODETECT, LAMMPS_STRING, \
   LMP_TYPE_SCALAR, LMP_TYPE_VECTOR, LMP_TYPE_ARRAY, \
   LMP_SIZE_VECTOR, LMP_SIZE_ROWS, LMP_SIZE_COLS, \
   LMP_VAR_EQUAL, LMP_VAR_ATOM, LMP_VAR_VECTOR, LMP_VAR_STRING, \
-  get_ctypes_int
+  LMP_BUFSIZE, get_ctypes_int
 
 from lammps.data import NeighList
 
@@ -83,8 +82,6 @@ class command_wrapper(object):
 
   def _wrap_args(self, x):
       if callable(x):
-          if sys.version_info <  (3,):
-            raise Exception("Passing functions or lambdas directly as arguments is only supported in Python 3 or newer")
           import hashlib
           import __main__
           sha = hashlib.sha256()
@@ -105,11 +102,6 @@ class command_wrapper(object):
     all the arguments, concatinates them to a single string, and executes it using
     :py:meth:`lammps.command`.
 
-    Starting with Python 3.6 it also supports keyword arguments. key=value is
-    transformed into 'key value'. Note, since these have come last in the
-    parameter list, only a subset of LAMMPS commands can be used with this
-    syntax.
-
     LAMMPS commands that accept callback functions (such as fix python/invoke)
     can be passed functions and lambdas directly. The first argument of such
     callbacks will be an lammps object constructed from the passed LAMMPS
@@ -120,9 +112,6 @@ class command_wrapper(object):
     """
     def handler(*args, **kwargs):
       cmd_args = [name] + [str(self._wrap_args(x)) for x in args]
-
-      if len(kwargs) > 0 and sys.version_info < (3,6):
-         raise Exception("Keyword arguments are only supported in Python 3.6 or newer")
 
       # Python 3.6+ maintains ordering of kwarg keys
       for k in kwargs.keys():
@@ -358,6 +347,8 @@ class lammps(object):
 
     self.lib.lammps_get_last_error_message.argtypes = [c_void_p, c_char_p, c_int]
     self.lib.lammps_get_last_error_message.restype = c_int
+    self.lib.lammps_set_show_error.argtypes = [c_void_p, c_int]
+    self.lib.lammps_set_show_error.restype = c_int
 
     self.lib.lammps_extract_global.argtypes = [c_void_p, c_char_p]
     self.lib.lammps_extract_global_datatype.argtypes = [c_void_p, c_char_p]
@@ -530,16 +521,10 @@ class lammps(object):
 
     else:
       # magic to convert ptr to ctypes ptr
-      if sys.version_info >= (3, 0):
-        # Python 3 (uses PyCapsule API)
-        pythonapi.PyCapsule_GetPointer.restype = c_void_p
-        pythonapi.PyCapsule_GetPointer.argtypes = [py_object, c_char_p]
-        self.lmp = c_void_p(pythonapi.PyCapsule_GetPointer(ptr, None))
-      else:
-        # Python 2 (uses PyCObject API)
-        pythonapi.PyCObject_AsVoidPtr.restype = c_void_p
-        pythonapi.PyCObject_AsVoidPtr.argtypes = [py_object]
-        self.lmp = c_void_p(pythonapi.PyCObject_AsVoidPtr(ptr))
+      # Python 3 (uses PyCapsule API)
+      pythonapi.PyCapsule_GetPointer.restype = c_void_p
+      pythonapi.PyCapsule_GetPointer.argtypes = [py_object, c_char_p]
+      self.lmp = c_void_p(pythonapi.PyCapsule_GetPointer(ptr, None))
 
     # check if library initilialization failed
     if not self.lmp:
@@ -721,8 +706,8 @@ class lammps(object):
     :rtype:  string
     """
 
-    sb = create_string_buffer(512)
-    self.lib.lammps_get_os_info(sb,512)
+    sb = create_string_buffer(LMP_BUFSIZE)
+    self.lib.lammps_get_os_info(sb, LMP_BUFSIZE)
     return sb.value.decode()
 
   # -------------------------------------------------------------------------
@@ -751,8 +736,8 @@ class lammps(object):
 
   @property
   def _lammps_exception(self):
-    sb = create_string_buffer(100)
-    error_type = self.lib.lammps_get_last_error_message(self.lmp, sb, 100)
+    sb = create_string_buffer(LMP_BUFSIZE)
+    error_type = self.lib.lammps_get_last_error_message(self.lmp, sb, LMP_BUFSIZE)
     error_msg = sb.value.decode().strip()
 
     if error_type == 2:
@@ -2141,6 +2126,27 @@ class lammps(object):
 
   # -------------------------------------------------------------------------
 
+  def set_show_error(self, flag):
+    """ Enable or disable direct printing of error messages in C++ code
+
+    .. versionadded:: 2Apr2025
+
+    This function allows to enable or disable printing of error message directly in
+    the C++ code.  Disabling the printing avoids printing error messages twice when
+    detecting and re-throwing them in Python code.
+
+    This is a wrapper around the :cpp:func:`lammps_set_show_error`
+    function of the library interface.
+
+    :param flag: enable (1) or disable (0) printing of error message
+    :type flag: int
+    :return: previous setting of the flag
+    :rtype: int
+    """
+    self.lib.lammps_set_show_error(self.lmp, flag)
+
+  # -------------------------------------------------------------------------
+
   def force_timeout(self):
     """ Trigger an immediate timeout, i.e. a "soft stop" of a run.
 
@@ -2317,8 +2323,9 @@ class lammps(object):
     :rtype:  string
     """
 
-    sb = create_string_buffer(8192)
-    self.lib.lammps_get_gpu_device_info(sb,8192)
+    BUFSIZE = 8192
+    sb = create_string_buffer(BUFSIZE)
+    self.lib.lammps_get_gpu_device_info(sb, BUFSIZE)
     return sb.value.decode()
 
   # -------------------------------------------------------------------------
@@ -2335,9 +2342,9 @@ class lammps(object):
     if self._installed_packages is None:
       self._installed_packages = []
       npackages = self.lib.lammps_config_package_count()
-      sb = create_string_buffer(100)
+      sb = create_string_buffer(LMP_BUFSIZE)
       for idx in range(npackages):
-        self.lib.lammps_config_package_name(idx, sb, 100)
+        self.lib.lammps_config_package_name(idx, sb, LMP_BUFSIZE)
         self._installed_packages.append(sb.value.decode())
     return self._installed_packages
 
@@ -2373,6 +2380,7 @@ class lammps(object):
     :return: list of style names in given category
     :rtype:  list
     """
+    BUFSIZE = 8192
     if self._available_styles is None:
       self._available_styles = {}
 
@@ -2380,10 +2388,10 @@ class lammps(object):
       self._available_styles[category] = []
       with ExceptionCheck(self):
         nstyles = self.lib.lammps_style_count(self.lmp, category.encode())
-      sb = create_string_buffer(100)
+      sb = create_string_buffer(BUFSIZE)
       for idx in range(nstyles):
         with ExceptionCheck(self):
-          self.lib.lammps_style_name(self.lmp, category.encode(), idx, sb, 100)
+          self.lib.lammps_style_name(self.lmp, category.encode(), idx, sb, BUFSIZE)
         self._available_styles[category].append(sb.value.decode())
     return self._available_styles[category]
 
@@ -2428,9 +2436,9 @@ class lammps(object):
     available_ids = []
     if category in categories:
       num = self.lib.lammps_id_count(self.lmp, category.encode())
-      sb = create_string_buffer(100)
+      sb = create_string_buffer(LMP_BUFSIZE)
       for idx in range(num):
-        self.lib.lammps_id_name(self.lmp, category.encode(), idx, sb, 100)
+        self.lib.lammps_id_name(self.lmp, category.encode(), idx, sb, LMP_BUFSIZE)
         available_ids.append(sb.value.decode())
     return available_ids
 
@@ -2450,10 +2458,10 @@ class lammps(object):
 
     available_plugins = []
     num = self.lib.lammps_plugin_count(self.lmp)
-    sty = create_string_buffer(100)
-    nam = create_string_buffer(100)
+    sty = create_string_buffer(LMP_BUFSIZE)
+    nam = create_string_buffer(LMP_BUFSIZE)
     for idx in range(num):
-      self.lib.lammps_plugin_name(idx, sty, nam, 100)
+      self.lib.lammps_plugin_name(idx, sty, nam, LMP_BUFSIZE)
       available_plugins.append([sty.value.decode(), nam.value.decode()])
     return available_plugins
 

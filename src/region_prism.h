@@ -26,6 +26,7 @@ namespace LAMMPS_NS {
 
 class RegPrism : public Region {
   friend class CreateBox;
+  friend class Region2VMD;
 
  public:
   RegPrism(class LAMMPS *, int, char **);

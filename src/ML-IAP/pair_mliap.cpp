@@ -35,6 +35,7 @@
 #include "atom.h"
 #include "error.h"
 #include "force.h"
+#include "info.h"
 #include "memory.h"
 #include "neighbor.h"
 
@@ -226,7 +227,7 @@ void PairMLIAP::settings(int narg, char ** arg)
 
 void PairMLIAP::coeff(int narg, char **arg)
 {
-  if (narg < 3) error->all(FLERR,"Incorrect args for pair coefficients");
+  if (narg < 3) error->all(FLERR,"Incorrect args for pair coefficients" + utils::errorurl(21));
   if (!allocated) allocate();
 
   char** elemtypes = &arg[2];
@@ -245,7 +246,7 @@ void PairMLIAP::coeff(int narg, char **arg)
     if (jelem < descriptor->nelements)
       map[i] = jelem;
     else if (strcmp(elemname,"NULL") == 0) map[i] = -1;
-    else error->all(FLERR,"Incorrect args for pair coefficients");
+    else error->all(FLERR,"Incorrect args for pair coefficients" + utils::errorurl(21));
   }
 
   // clear setflag since coeff() called once with I,J = * *
@@ -265,7 +266,7 @@ void PairMLIAP::coeff(int narg, char **arg)
         count++;
       }
 
-  if (count == 0) error->all(FLERR,"Incorrect args for pair coefficients");
+  if (count == 0) error->all(FLERR,"Incorrect args for pair coefficients" + utils::errorurl(21));
 
   // set up model, descriptor, and mliap data structures
 
@@ -357,7 +358,10 @@ void PairMLIAP::init_style()
 
 double PairMLIAP::init_one(int i, int j)
 {
-  if (setflag[i][j] == 0) error->all(FLERR,"All pair coeffs are not set");
+  if (setflag[i][j] == 0)
+    error->all(FLERR, Error::NOLASTLINE,
+               "All pair coeffs are not set. Status\n" + Info::get_pair_coeff_status(lmp));
+
   double cutmax = sqrt(descriptor->cutsq[map[i]][map[j]]);
   cutghost[i][j] = cutghost[j][i] = 2.0 * cutmax + neighbor->skin;
   return cutmax;

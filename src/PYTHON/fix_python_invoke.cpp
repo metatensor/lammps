@@ -70,7 +70,7 @@ FixPythonInvoke::FixPythonInvoke(LAMMPS *lmp, int narg, char **arg) :
     error->all(FLERR,"Could not find Python function");
   }
 
-  lmpPtr = PY_VOID_POINTER(lmp);
+  lmpPtr = PyCapsule_New((void *)lmp, nullptr, nullptr);
 
   // nvalid = next step on which end_of_step or post_force does something
   // add nextvalid() to all computes that store invocation times

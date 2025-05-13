@@ -40,6 +40,13 @@ mark_as_advanced(PLUMED_URL)
 mark_as_advanced(PLUMED_MD5)
 GetFallbackURL(PLUMED_URL PLUMED_FALLBACK)
 
+# adjust C++ standard support for self-compiled Plumed2
+if(CMAKE_CXX_STANDARD GREATER 11)
+  set(PLUMED_CXX_STANDARD 14)
+else()
+  set(PLUMED_CXX_STANDARD 11)
+endif()
+
 if((CMAKE_SYSTEM_NAME STREQUAL "Windows") AND (CMAKE_CROSSCOMPILING))
   if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
     set(CROSS_CONFIGURE mingw64-configure)
@@ -55,7 +62,7 @@ if((CMAKE_SYSTEM_NAME STREQUAL "Windows") AND (CMAKE_CROSSCOMPILING))
     URL_MD5 ${PLUMED_MD5}
     BUILD_IN_SOURCE 1
     CONFIGURE_COMMAND ${CROSS_CONFIGURE} --disable-shared --disable-bsymbolic
-                                         --disable-python --enable-cxx=11
+                                         --disable-python --enable-cxx=${PLUMED_CXX_STANDARD}
                                          --enable-modules=-adjmat:+crystallization:-dimred:+drr:+eds:-fisst:+funnel:+logmfd:+manyrestraints:+maze:+opes:+multicolvar:-pamm:-piv:+s2cm:-sasa:-ves
                                          ${PLUMED_CONFIG_OMP}
                                          ${PLUMED_CONFIG_MPI}
@@ -142,7 +149,7 @@ else()
       CONFIGURE_COMMAND <SOURCE_DIR>/configure --prefix=<INSTALL_DIR>
                                              ${CONFIGURE_REQUEST_PIC}
                                              --enable-modules=all
-                                             --enable-cxx=11
+                                             --enable-cxx=${PLUMED_CXX_STANDARD}
                                              --disable-python
                                              ${PLUMED_CONFIG_MPI}
                                              ${PLUMED_CONFIG_OMP}

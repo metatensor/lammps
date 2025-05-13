@@ -4,7 +4,7 @@
 dihedral_style multi/harmonic command
 =====================================
 
-Accelerator Variants: *multi/harmonic/omp*
+Accelerator Variants: *multi/harmonic/kk*, *multi/harmonic/omp*
 
 Syntax
 """"""
