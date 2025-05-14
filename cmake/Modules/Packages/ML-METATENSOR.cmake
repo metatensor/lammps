@@ -81,4 +81,4 @@ endif()
 
 ################ lammps target modifications ################
 
-target_link_libraries(lammps PRIVATE metatensor_torch)
+target_link_libraries(lammps PUBLIC metatensor_torch)
