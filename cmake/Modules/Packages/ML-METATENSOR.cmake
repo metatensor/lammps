@@ -41,8 +41,8 @@ endif()
 
 ########### definition of metatensor and metatensor-torch targets ###########
 
-set(METATENSOR_CORE_VERSION "0.1.12")
-set(METATENSOR_TORCH_VERSION "0.7.3")
+set(METATENSOR_CORE_VERSION "0.1.14")
+set(METATENSOR_TORCH_VERSION "0.7.6")
 
 set(DOWNLOAD_METATENSOR_DEFAULT ON)
 find_package(metatensor_torch QUIET ${METATENSOR_TORCH_VERSION})
@@ -60,7 +60,7 @@ if (DOWNLOAD_METATENSOR)
 
     FetchContent_Declare(metatensor
         URL ${URL_BASE}/metatensor-core-v${METATENSOR_CORE_VERSION}/metatensor-core-cxx-${METATENSOR_CORE_VERSION}.tar.gz
-        URL_HASH SHA1=aec0963624f7fcd470e71471eb22b8912aec912e
+        URL_HASH SHA1=9e21c48d9059d8a37618958d9d253220dedf7562
     )
 
     message(STATUS "Fetching metatensor v${METATENSOR_CORE_VERSION} from github")
@@ -68,7 +68,7 @@ if (DOWNLOAD_METATENSOR)
 
     FetchContent_Declare(metatensor-torch
         URL ${URL_BASE}/metatensor-torch-v${METATENSOR_TORCH_VERSION}/metatensor-torch-cxx-${METATENSOR_TORCH_VERSION}.tar.gz
-        URL_HASH SHA1=26f989650d29008ab640aa6bdea706f88adc4fba
+        URL_HASH SHA1=5668f5088a42507e9ca4a7b723b3baac0286035c
     )
 
     message(STATUS "Fetching metatensor-torch v${METATENSOR_TORCH_VERSION} from github")
