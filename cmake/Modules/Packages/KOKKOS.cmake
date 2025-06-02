@@ -203,8 +203,8 @@ if(PKG_ML-IAP)
   endif()
 endif()
 
-if(PKG_ML-METATENSOR)
-  list(APPEND KOKKOS_PKG_SOURCES ${KOKKOS_PKG_SOURCES_DIR}/metatensor_system_kokkos.cpp)
+if(PKG_ML-METATOMIC)
+  list(APPEND KOKKOS_PKG_SOURCES ${KOKKOS_PKG_SOURCES_DIR}/metatomic_system_kokkos.cpp)
 endif()
 
 if(PKG_PHONON)
