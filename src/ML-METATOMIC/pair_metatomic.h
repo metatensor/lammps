@@ -13,6 +13,8 @@
 #ifdef PAIR_CLASS
 // clang-format off
 PairStyle(metatomic, PairMetatomic);
+PairStyle(metatomic_1, PairMetatomic);
+PairStyle(metatomic_2, PairMetatomic);
 // clang-format on
 #else
 
@@ -64,6 +66,8 @@ protected:
     int32_t *type_mapping;
     // adaptor from LAMMPS system to metatomic's
     std::unique_ptr<MetatomicSystemAdaptor> system_adaptor;
+
+    double scale;
 };
 
 }    // namespace LAMMPS_NS

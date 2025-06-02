@@ -130,22 +130,28 @@ void PairMetatomic::settings(int argc, char ** argv) {
             if (i == argc - 1) {
                 error->all(FLERR, "expected <on/off> after 'non_conservative' in pair_style metatensor, got nothing");
             } else if (strcmp(argv[i + 1], "on") == 0) {
-                mts_data->non_conservative = true;
+                mta_data->non_conservative = true;
                 // add the non-conservative forces and stress to the requested outputs
-                auto output_nc_forces = torch::make_intrusive<metatensor_torch::ModelOutputHolder>();
+                auto output_nc_forces = torch::make_intrusive<metatomic_torch::ModelOutputHolder>();
                 output_nc_forces->explicit_gradients = {};
                 output_nc_forces->set_quantity("force");
-                output_nc_forces->set_unit(mts_data->evaluation_options->outputs.at("energy")->unit() + "/" + mts_data->evaluation_options->length_unit());
+                output_nc_forces->set_unit(mta_data->evaluation_options->outputs.at("energy")->unit() + "/" + mta_data->evaluation_options->length_unit());
                 output_nc_forces->per_atom = true;
-                mts_data->evaluation_options->outputs.insert("non_conservative_forces", output_nc_forces);
-                auto output_nc_stress = torch::make_intrusive<metatensor_torch::ModelOutputHolder>();
+                mta_data->evaluation_options->outputs.insert("non_conservative_forces", output_nc_forces);
+                auto output_nc_stress = torch::make_intrusive<metatomic_torch::ModelOutputHolder>();
                 output_nc_stress->explicit_gradients = {};
                 output_nc_stress->set_quantity("pressure");
-                output_nc_stress->set_unit(mts_data->evaluation_options->outputs.at("energy")->unit() + "/" + mts_data->evaluation_options->length_unit() + "^3");
+                output_nc_stress->set_unit(mta_data->evaluation_options->outputs.at("energy")->unit() + "/" + mta_data->evaluation_options->length_unit() + "^3");
                 output_nc_stress->per_atom = false;
-                mts_data->evaluation_options->outputs.insert("non_conservative_stress", output_nc_stress);
+                mta_data->evaluation_options->outputs.insert("non_conservative_stress", output_nc_stress);
             } else if (strcmp(argv[i + 1], "off") == 0) {
-                mts_data->non_conservative = false;
+                mta_data->non_conservative = false;
+            } else if (strcmp(argv[i], "scale") == 0) {
+                if (i == argc - 1) {
+                    error->all(FLERR, "GRR");
+                }
+                this->scale = std::stod(argv[i + 1]);
+                i += 1;
             } else {
                 error->all(FLERR, "expected <on/off> after 'non_conservative' in pair_style metatensor, got '{}'", argv[i + 1]);
             }
@@ -162,6 +168,12 @@ void PairMetatomic::settings(int argc, char ** argv) {
                 error->all(FLERR, "expected string after 'device' in pair_style metatomic, got nothing");
             }
             requested_device = argv[i + 1];
+            i += 1;
+        } else if (strcmp(argv[i], "scale") == 0) {
+            if (i == argc - 1) {
+                error->all(FLERR, "GRR");
+            }
+            this->scale = std::stod(argv[i + 1]);
             i += 1;
         } else {
             error->all(FLERR, "unexpected argument to pair_style metatomic: '{}'", argv[i]);
@@ -440,6 +452,8 @@ void PairMetatomic::compute(int eflag, int vflag) {
 
     auto _ = MetatomicTimer("PairMetatomic::compute");
 
+    std::cout << this->mta_data->non_conservative << " " << this->scale << std::endl;
+
     if (eflag || vflag) {
         ev_setup(eflag, vflag);
     } else {
@@ -484,7 +498,7 @@ void PairMetatomic::compute(int eflag, int vflag) {
     );
     mta_data->evaluation_options->set_selected_atoms(selected_atoms);
 
-    if (mts_data->non_conservative) {
+    if (mta_data->non_conservative) {
         // disable gradient tracking
         system->positions().set_requires_grad(false);
         system->cell().set_requires_grad(false);
@@ -513,7 +527,7 @@ void PairMetatomic::compute(int eflag, int vflag) {
     torch::Tensor forces_tensor;
     torch::Tensor virial_tensor;
 
-    if (mts_data->non_conservative) {
+    if (mta_data->non_conservative) {
         auto forces = result.at("non_conservative_forces").toCustomClass<metatensor_torch::TensorMapHolder>();;
         auto forces_block = metatensor_torch::TensorMapHolder::block_by_id(forces, 0);
         forces_tensor = forces_block->values().squeeze(-1);
@@ -576,7 +590,7 @@ void PairMetatomic::compute(int eflag, int vflag) {
         }
 
         if (eflag_global) {
-            eng_vdwl += global_energy.item<double>();
+            eng_vdwl += this->scale * global_energy.item<double>();
         }
 
         // store forces/virial
@@ -584,15 +598,15 @@ void PairMetatomic::compute(int eflag, int vflag) {
 
         auto forces = forces_tensor.accessor<double, 2>();
         for (int i=0; i<atom->nlocal; i++) {
-            atom->f[i][0] += forces[i][0];
-            atom->f[i][1] += forces[i][1];
-            atom->f[i][2] += forces[i][2];
+            atom->f[i][0] += this->scale * forces[i][0];
+            atom->f[i][1] += this->scale * forces[i][1];
+            atom->f[i][2] += this->scale * forces[i][2];
         }
-        if (!mts_data->non_conservative) {
+        if (!mta_data->non_conservative) {
             for (int i=atom->nlocal; i<atom->nlocal + atom->nghost; i++) {
-                atom->f[i][0] += forces[i][0];
-                atom->f[i][1] += forces[i][1];
-                atom->f[i][2] += forces[i][2];
+                atom->f[i][0] += this->scale * forces[i][0];
+                atom->f[i][1] += this->scale * forces[i][1];
+                atom->f[i][2] += this->scale * forces[i][2];
             }
         }
 
@@ -602,13 +616,13 @@ void PairMetatomic::compute(int eflag, int vflag) {
             assert(virial_tensor.is_cpu() && virial_tensor.scalar_type() == torch::kFloat64);
             auto predicted_virial = virial_tensor.accessor<double, 2>();
 
-            virial[0] += predicted_virial[0][0];
-            virial[1] += predicted_virial[1][1];
-            virial[2] += predicted_virial[2][2];
+            virial[0] += this->scale * predicted_virial[0][0];
+            virial[1] += this->scale * predicted_virial[1][1];
+            virial[2] += this->scale * predicted_virial[2][2];
 
-            virial[3] += 0.5 * (predicted_virial[1][0] + predicted_virial[0][1]);
-            virial[4] += 0.5 * (predicted_virial[2][0] + predicted_virial[0][2]);
-            virial[5] += 0.5 * (predicted_virial[2][1] + predicted_virial[1][2]);
+            virial[3] += this->scale * 0.5 * (predicted_virial[1][0] + predicted_virial[0][1]);
+            virial[4] += this->scale * 0.5 * (predicted_virial[2][0] + predicted_virial[0][2]);
+            virial[5] += this->scale * 0.5 * (predicted_virial[2][1] + predicted_virial[1][2]);
         }
 
         if (vflag_atom) {
