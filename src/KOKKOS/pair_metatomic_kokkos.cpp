@@ -163,7 +163,7 @@ void PairMetatomicKokkos<DeviceType>::compute(int eflag, int vflag) {
     );
     mta_data->evaluation_options->set_selected_atoms(selected_atoms);
 
-    if (mts_data->non_conservative) {
+    if (mta_data->non_conservative) {
         // disable gradient tracking
         system->positions().set_requires_grad(false);
         system->cell().set_requires_grad(false);
@@ -192,7 +192,7 @@ void PairMetatomicKokkos<DeviceType>::compute(int eflag, int vflag) {
     torch::Tensor forces_tensor;
     torch::Tensor virial_tensor;
 
-    if (mts_data->non_conservative) {
+    if (mta_data->non_conservative) {
         auto forces = result.at("non_conservative_forces").toCustomClass<metatensor_torch::TensorMapHolder>();;
         auto forces_block = metatensor_torch::TensorMapHolder::block_by_id(forces, 0);
         forces_tensor = forces_block->values().squeeze(-1);
@@ -208,7 +208,7 @@ void PairMetatomicKokkos<DeviceType>::compute(int eflag, int vflag) {
         this->system_adaptor->positions.mutable_grad() = torch::Tensor();
         this->system_adaptor->strain.mutable_grad() = torch::Tensor();
 
-        auto _ = MetatensorTimer("running Model::backward");
+        auto _ = MetatomicTimer("running Model::backward");
         energy_tensor.backward(-torch::ones_like(energy_tensor));
 
         forces_tensor = this->system_adaptor->positions.grad();
@@ -270,7 +270,7 @@ void PairMetatomicKokkos<DeviceType>::compute(int eflag, int vflag) {
         );
 
         int num_forces_to_update;
-        if (mts_data->non_conservative) {
+        if (mta_data->non_conservative) {
             num_forces_to_update = atomKK->nlocal;
         } else {
             num_forces_to_update = atomKK->nlocal + atomKK->nghost;

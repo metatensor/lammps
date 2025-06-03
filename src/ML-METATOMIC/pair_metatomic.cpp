@@ -130,22 +130,22 @@ void PairMetatomic::settings(int argc, char ** argv) {
             if (i == argc - 1) {
                 error->all(FLERR, "expected <on/off> after 'non_conservative' in pair_style metatensor, got nothing");
             } else if (strcmp(argv[i + 1], "on") == 0) {
-                mts_data->non_conservative = true;
+                mta_data->non_conservative = true;
                 // add the non-conservative forces and stress to the requested outputs
-                auto output_nc_forces = torch::make_intrusive<metatensor_torch::ModelOutputHolder>();
+                auto output_nc_forces = torch::make_intrusive<metatomic_torch::ModelOutputHolder>();
                 output_nc_forces->explicit_gradients = {};
                 output_nc_forces->set_quantity("force");
-                output_nc_forces->set_unit(mts_data->evaluation_options->outputs.at("energy")->unit() + "/" + mts_data->evaluation_options->length_unit());
+                output_nc_forces->set_unit(mta_data->evaluation_options->outputs.at("energy")->unit() + "/" + mta_data->evaluation_options->length_unit());
                 output_nc_forces->per_atom = true;
-                mts_data->evaluation_options->outputs.insert("non_conservative_forces", output_nc_forces);
-                auto output_nc_stress = torch::make_intrusive<metatensor_torch::ModelOutputHolder>();
+                mta_data->evaluation_options->outputs.insert("non_conservative_forces", output_nc_forces);
+                auto output_nc_stress = torch::make_intrusive<metatomic_torch::ModelOutputHolder>();
                 output_nc_stress->explicit_gradients = {};
                 output_nc_stress->set_quantity("pressure");
-                output_nc_stress->set_unit(mts_data->evaluation_options->outputs.at("energy")->unit() + "/" + mts_data->evaluation_options->length_unit() + "^3");
+                output_nc_stress->set_unit(mta_data->evaluation_options->outputs.at("energy")->unit() + "/" + mta_data->evaluation_options->length_unit() + "^3");
                 output_nc_stress->per_atom = false;
-                mts_data->evaluation_options->outputs.insert("non_conservative_stress", output_nc_stress);
+                mta_data->evaluation_options->outputs.insert("non_conservative_stress", output_nc_stress);
             } else if (strcmp(argv[i + 1], "off") == 0) {
-                mts_data->non_conservative = false;
+                mta_data->non_conservative = false;
             } else {
                 error->all(FLERR, "expected <on/off> after 'non_conservative' in pair_style metatensor, got '{}'", argv[i + 1]);
             }
@@ -484,7 +484,7 @@ void PairMetatomic::compute(int eflag, int vflag) {
     );
     mta_data->evaluation_options->set_selected_atoms(selected_atoms);
 
-    if (mts_data->non_conservative) {
+    if (mta_data->non_conservative) {
         // disable gradient tracking
         system->positions().set_requires_grad(false);
         system->cell().set_requires_grad(false);
@@ -513,7 +513,7 @@ void PairMetatomic::compute(int eflag, int vflag) {
     torch::Tensor forces_tensor;
     torch::Tensor virial_tensor;
 
-    if (mts_data->non_conservative) {
+    if (mta_data->non_conservative) {
         auto forces = result.at("non_conservative_forces").toCustomClass<metatensor_torch::TensorMapHolder>();;
         auto forces_block = metatensor_torch::TensorMapHolder::block_by_id(forces, 0);
         forces_tensor = forces_block->values().squeeze(-1);
@@ -588,7 +588,7 @@ void PairMetatomic::compute(int eflag, int vflag) {
             atom->f[i][1] += forces[i][1];
             atom->f[i][2] += forces[i][2];
         }
-        if (!mts_data->non_conservative) {
+        if (!mta_data->non_conservative) {
             for (int i=atom->nlocal; i<atom->nlocal + atom->nghost; i++) {
                 atom->f[i][0] += forces[i][0];
                 atom->f[i][1] += forces[i][1];
