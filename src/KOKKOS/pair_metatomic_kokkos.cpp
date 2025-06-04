@@ -71,6 +71,7 @@ void PairMetatomicKokkos<DeviceType>::init_style() {
         this->type_mapping_kk.data(),
         mta_data->max_cutoff,
         mta_data->check_consistency,
+        !(mta_data->non_conservative),
     };
 
     // override the system adaptor with the kokkos version
@@ -162,15 +163,6 @@ void PairMetatomicKokkos<DeviceType>::compute(int eflag, int vflag) {
         std::vector<std::string>{"system", "atom"}, mta_data->selected_atoms_values
     );
     mta_data->evaluation_options->set_selected_atoms(selected_atoms);
-
-    if (mta_data->non_conservative) {
-        // disable gradient tracking
-        system->positions().set_requires_grad(false);
-        system->cell().set_requires_grad(false);
-        for (auto nl_options: system->known_neighbor_lists()) {
-            system->get_neighbor_list(nl_options)->values().set_requires_grad(false);
-        }
-    }
 
     torch::IValue result_ivalue;
     try {

@@ -404,6 +404,7 @@ void PairMetatomic::init_style() {
         this->type_mapping,
         mta_data->max_cutoff,
         mta_data->check_consistency,
+        !(mta_data->non_conservative),
     };
     this->system_adaptor = std::make_unique<MetatomicSystemAdaptor>(lmp, options);
 
@@ -483,15 +484,6 @@ void PairMetatomic::compute(int eflag, int vflag) {
         std::vector<std::string>{"system", "atom"}, mta_data->selected_atoms_values
     );
     mta_data->evaluation_options->set_selected_atoms(selected_atoms);
-
-    if (mta_data->non_conservative) {
-        // disable gradient tracking
-        system->positions().set_requires_grad(false);
-        system->cell().set_requires_grad(false);
-        for (auto nl_options: system->known_neighbor_lists()) {
-            system->get_neighbor_list(nl_options)->values().set_requires_grad(false);
-        }
-    }
 
     torch::IValue result_ivalue;
     try {
@@ -582,18 +574,18 @@ void PairMetatomic::compute(int eflag, int vflag) {
         // store forces/virial
         assert(forces_tensor.is_cpu() && forces_tensor.scalar_type() == torch::kFloat64);
 
+        int num_forces_to_update;
+        if (mta_data->non_conservative) {
+            num_forces_to_update = atom->nlocal;
+        } else {
+            num_forces_to_update = atom->nlocal + atom->nghost;
+        }
+
         auto forces = forces_tensor.accessor<double, 2>();
-        for (int i=0; i<atom->nlocal; i++) {
+        for (int i=0; i<num_forces_to_update; i++) {
             atom->f[i][0] += forces[i][0];
             atom->f[i][1] += forces[i][1];
             atom->f[i][2] += forces[i][2];
-        }
-        if (!mta_data->non_conservative) {
-            for (int i=atom->nlocal; i<atom->nlocal + atom->nghost; i++) {
-                atom->f[i][0] += forces[i][0];
-                atom->f[i][1] += forces[i][1];
-                atom->f[i][2] += forces[i][2];
-            }
         }
 
         assert(!vflag_fdotr);
