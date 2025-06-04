@@ -49,7 +49,8 @@ using namespace LAMMPS_NS;
 PairMetatomic::PairMetatomic(LAMMPS *lmp):
     Pair(lmp),
     type_mapping(nullptr),
-    system_adaptor(nullptr)
+    system_adaptor(nullptr),
+    scale(1.0)
 {
     std::string energy_unit;
     std::string length_unit;
@@ -447,8 +448,6 @@ void PairMetatomic::compute(int eflag, int vflag) {
 
     auto _ = MetatomicTimer("PairMetatomic::compute");
 
-    std::cout << this->mta_data->non_conservative << " " << this->scale << std::endl;
-
     if (eflag || vflag) {
         ev_setup(eflag, vflag);
     } else {
@@ -591,9 +590,9 @@ void PairMetatomic::compute(int eflag, int vflag) {
 
         auto forces = forces_tensor.accessor<double, 2>();
         for (int i=0; i<num_forces_to_update; i++) {
-            atom->f[i][0] += forces[i][0];
-            atom->f[i][1] += forces[i][1];
-            atom->f[i][2] += forces[i][2];
+            atom->f[i][0] += this->scale * forces[i][0];
+            atom->f[i][1] += this->scale * forces[i][1];
+            atom->f[i][2] += this->scale * forces[i][2];
         }
 
         assert(!vflag_fdotr);
