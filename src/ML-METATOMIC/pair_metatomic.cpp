@@ -146,12 +146,6 @@ void PairMetatomic::settings(int argc, char ** argv) {
                 mta_data->evaluation_options->outputs.insert("non_conservative_stress", output_nc_stress);
             } else if (strcmp(argv[i + 1], "off") == 0) {
                 mta_data->non_conservative = false;
-            } else if (strcmp(argv[i], "scale") == 0) {
-                if (i == argc - 1) {
-                    error->all(FLERR, "GRR");
-                }
-                this->scale = std::stod(argv[i + 1]);
-                i += 1;
             } else {
                 error->all(FLERR, "expected <on/off> after 'non_conservative' in pair_style metatensor, got '{}'", argv[i + 1]);
             }
@@ -171,9 +165,9 @@ void PairMetatomic::settings(int argc, char ** argv) {
             i += 1;
         } else if (strcmp(argv[i], "scale") == 0) {
             if (i == argc - 1) {
-                error->all(FLERR, "GRR");
+                error->all(FLERR, "expected a number after 'scale' in pair_style metatomic, got nothing");
             }
-            this->scale = std::stod(argv[i + 1]);
+            this->scale = utils::numeric(FLERR, argv[i + 1], false, lmp);
             i += 1;
         } else {
             error->all(FLERR, "unexpected argument to pair_style metatomic: '{}'", argv[i]);
@@ -568,7 +562,7 @@ void PairMetatomic::compute(int eflag, int vflag) {
                 // the per-atom energy tensor
                 auto atom_i = samples[i][1];
                 assert(atom_i < n_atoms);
-                eatom[atom_i] += energies[i][0];
+                eatom[atom_i] += this->scale * energies[i][0];
             }
 
             global_energy = energy_detached.sum(0);
