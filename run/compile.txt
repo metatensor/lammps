@@ -1,0 +1,1 @@
+cmake ../cmake/ -DPKG_ML-METATOMIC=ON -DCMAKE_PREFIX_PATH=../../libtorch/share/cmake/

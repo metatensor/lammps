@@ -1,0 +1,25 @@
+Traceback (most recent call last):
+  File "/home/filippo/code/virtualenvs/base/lib/python3.12/site-packages/metatrain/utils/io.py", line 186, in model_from_checkpoint
+    return architecture.__model__.load_checkpoint(checkpoint, context=context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/filippo/code/virtualenvs/base/lib/python3.12/site-packages/metatrain/pet/model.py", line 708, in load_checkpoint
+    model.to(dtype).load_state_dict(model_state_dict)
+  File "/home/filippo/code/virtualenvs/base/lib/python3.12/site-packages/torch/nn/modules/module.py", line 2581, in load_state_dict
+    raise RuntimeError(
+RuntimeError: Error(s) in loading state_dict for PET:
+	Missing key(s) in state_dict: "additive_models.0.model.dummy_buffer", "additive_models.0.model.energy_composition_buffer". 
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/filippo/code/virtualenvs/base/lib/python3.12/site-packages/metatrain/__main__.py", line 110, in main
+    export_model(**args.__dict__)
+  File "/home/filippo/code/virtualenvs/base/lib/python3.12/site-packages/metatrain/cli/export.py", line 151, in export_model
+    model = load_model(path=path, hf_token=hf_token)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/filippo/code/virtualenvs/base/lib/python3.12/site-packages/metatrain/utils/io.py", line 163, in load_model
+    return model_from_checkpoint(path, context="export")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/filippo/code/virtualenvs/base/lib/python3.12/site-packages/metatrain/utils/io.py", line 188, in model_from_checkpoint
+    raise ValueError(
+ValueError: path '/tmp/tmpj6hmq_wy' is not a valid checkpoint for the pet architecture
