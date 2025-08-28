@@ -22,7 +22,7 @@
 
 using namespace LAMMPS_NS;
 
-PairMetatomicData::PairMetatomicData(std::string length_unit, std::string energy_unit):
+PairMetatomicData::PairMetatomicData(std::string length_unit, std::string energy_unit, bool flash):
     device(torch::kCPU),
     check_consistency(false),
     remap_pairs(true),
@@ -36,13 +36,31 @@ PairMetatomicData::PairMetatomicData(std::string length_unit, std::string energy
     this->evaluation_options = torch::make_intrusive<metatomic_torch::ModelEvaluationOptionsHolder>();
     this->evaluation_options->set_length_unit(std::move(length_unit));
 
-    auto output = torch::make_intrusive<metatomic_torch::ModelOutputHolder>();
-    output->explicit_gradients = {};
-    output->set_quantity("energy");
-    output->set_unit(std::move(energy_unit));
-    output->per_atom = false;
+    if(!flash) {
+        auto output = torch::make_intrusive<metatomic_torch::ModelOutputHolder>();
+        output->explicit_gradients = {};
+        output->set_quantity("energy");
+        output->set_unit(std::move(energy_unit));
+        output->per_atom = false;
 
-    this->evaluation_options->outputs.insert("energy", output);
+        this->evaluation_options->outputs.insert("energy", output);
+    } else {
+        // FlashMD needs position change delta-q and momenta p
+        auto delta_q = torch::make_intrusive<metatomic_torch::ModelOutputHolder>();
+        delta_q->explicit_gradients = {};
+        delta_q->set_quantity("length");
+        // TODO: the position change unit and momentum unit shouldn't be energy, but that needs to be changed in the model first
+        delta_q->set_unit("angstrom");
+        delta_q->per_atom = true;
+        this->evaluation_options->outputs.insert("mtt::delta_64_q", delta_q);
+
+        auto p = torch::make_intrusive<metatomic_torch::ModelOutputHolder>();
+        p->explicit_gradients = {};
+        p->set_quantity("momentum");
+        p->set_unit("sqrt(eV*u)");
+        p->per_atom = true;
+        this->evaluation_options->outputs.insert("mtt::p_64", p);
+    }
 }
 
 void PairMetatomicData::load_model(
@@ -72,9 +90,18 @@ void PairMetatomicData::load_model(
    auto capabilities_ivalue = this->model->run_method("capabilities");
    this->capabilities = capabilities_ivalue.toCustomClass<metatomic_torch::ModelCapabilitiesHolder>();
 
-   if (!this->capabilities->outputs().contains("energy")) {
+   // TODO: For FlashMD, not having the energy output is fine.
+   /*if (!this->capabilities->outputs().contains("energy")) {
        lmp->error->all(FLERR, "the model at '{}' does not have an \"energy\" output, we can not use it in pair_style metatensor", path);
-   }
+   }*/
+   // Print the available outputs
+   if (lmp->comm->me == 0) {
+        auto capabilities = this->capabilities->outputs();
+        for (const auto& it: capabilities) {
+            if (lmp->screen)  fprintf(lmp->screen,  "metatensor model output: %s\n", it.key().c_str());
+            if (lmp->logfile) fprintf(lmp->logfile, "metatensor model output: %s\n", it.key().c_str());
+        }
+    }
 
    if (lmp->comm->me == 0) {
        auto metadata_ivalue = this->model->run_method("metadata");

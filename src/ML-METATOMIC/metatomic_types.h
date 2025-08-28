@@ -26,7 +26,7 @@
 namespace LAMMPS_NS {
 
 struct PairMetatomicData {
-   PairMetatomicData(std::string length_unit, std::string energy_unit);
+   PairMetatomicData(std::string length_unit, std::string energy_unit, bool flash = false);
 
    void load_model(LAMMPS* lmp, const char* path, const char* extensions_directory);
 

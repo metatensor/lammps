@@ -11,15 +11,27 @@
 
    See the README file in the top-level LAMMPS directory.
 ------------------------------------------------------------------------- */
+#include "pair_metatomic.h"
+#include "metatomic_types.h"
+#include "metatomic_system.h"
 
 #include "fix_flashmd.h"
 
 #include "atom.h"
+#include "memory.h"
 #include "error.h"
 #include "force.h"
 #include "update.h"
+#include "neighbor.h"
+#include "neigh_list.h"
+#include "neigh_request.h"
+#include "comm.h"
 
+#include<vector>
 #include <iostream>
+
+#include <metatomic/torch.hpp>
+#include <metatensor/torch.hpp>
 
 using namespace LAMMPS_NS;
 using namespace FixConst;
@@ -50,10 +62,10 @@ FixFlashMD::FixFlashMD(LAMMPS *lmp, int narg, char **arg) :
   if (narg < 4) error->all(FLERR, "Illegal fix flashmd command");
 
   bool types_are_set = false;
-  std::string model_path = arg[3];
+  model_path = arg[3];
   std::string energy_model_path;
-  std::string requested_device;
   bool rescale_energy = false;
+  std::vector<int> parsed_types;
 
   int iarg = 4;
   while (iarg < narg) {
@@ -74,6 +86,7 @@ FixFlashMD::FixFlashMD(LAMMPS *lmp, int narg, char **arg) :
         if (type <= 0) {
           error->all(FLERR, "Illegal fix flashmd command: type {} should be > 0", type);
         }
+        parsed_types.push_back(type);
         current_num_types++;
         if (current_num_types > atom->ntypes) {
           error->all(FLERR, "Illegal fix flashmd command: too many types specified");
@@ -104,17 +117,29 @@ FixFlashMD::FixFlashMD(LAMMPS *lmp, int narg, char **arg) :
   if (!types_are_set) {
     error->all(FLERR, "Illegal fix flashmd command: no types specified");
   }
+  if ((int)parsed_types.size() != atom->ntypes) {
+    error->all(FLERR, "Illegal fix flashmd command: number of types does not match number of atom types");
+  }
+
+  // Allocate and fill the type-mapping (1-based indexing)
+  type_mapping = memory->create(type_mapping, atom->ntypes + 1, "FixFlashMD:type_mapping");
+  for (int i = 1; i <= atom->ntypes; i++) {
+    type_mapping[i] = parsed_types[i - 1];
+  }
 
   std::cout << "types_are_set = " << types_are_set << std::endl;
   std::cout << "energy_model_path = " << energy_model_path << std::endl;
   std::cout << "model_path = " << model_path << std::endl;
   std::cout << "requested_device = " << requested_device << std::endl;
 
-
-  exit(1);
+  this->mta_data = new PairMetatomicData(std::move(length_unit), std::move(energy_unit), true);
 
   time_integrate = 1;  // this tells LAMMPS that this fix advances simulation time
   // Note: for now we don't allow dynamic groups (dynamic_group_allow variable)
+}
+
+FixFlashMD::~FixFlashMD() {
+  memory->destroy(type_mapping);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -133,12 +158,181 @@ int FixFlashMD::setmask()
 
 void FixFlashMD::init()
 {
+  if (!type_mapping) {
+      error->all(FLERR, "FixFlashMD internal error: type_mapping not initialized");
+  }
+
+  const char *extensions_directory = nullptr;
+
   dt = update->dt;
   // TODO: what to do with units if not metal????
+  mta_data->load_model(this->lmp, model_path.c_str(), extensions_directory);
 
-  // Load model here
+  // Select the device to use based on the model's preference, the user choice
+  // and what's available.
+  this->pick_device(&mta_data->device, requested_device.c_str());
 
-  // Initialize metatensor system object here?
+  // move all data to the correct device
+  mta_data->model->to(mta_data->device);
+  mta_data->selected_atoms_values = mta_data->selected_atoms_values.to(mta_data->device);
+
+  auto message = "Running simulation on " + mta_data->device.str() + " device with " + mta_data->capabilities->dtype() + " data";
+  if (screen) {
+      fprintf(screen, "%s\n", message.c_str());
+  }
+  if (logfile) {
+      fprintf(logfile,"%s\n", message.c_str());
+  }
+
+  // get the model's interaction range
+  auto range = mta_data->capabilities->engine_interaction_range(mta_data->evaluation_options->length_unit());
+  if (range < 0) {
+      error->all(FLERR, "interaction_range is negative for this model");
+  } else if (!std::isfinite(range)) {
+      if (comm->nprocs > 1) {
+          error->all(FLERR,
+              "interaction_range is infinite for this model, "
+              "using multiple MPI domains is not supported"
+          );
+      }
+
+      // determine the maximal cutoff in the NL
+      auto requested_nl = mta_data->model->run_method("requested_neighbor_lists");
+      for (const auto& ivalue: requested_nl.toList()) {
+          auto options = ivalue.get().toCustomClass<metatomic_torch::NeighborListOptionsHolder>();
+          auto cutoff = options->engine_cutoff(mta_data->evaluation_options->length_unit());
+
+          mta_data->max_cutoff = std::max(mta_data->max_cutoff, cutoff);
+      }
+  } else {
+      mta_data->max_cutoff = range;
+  }
+
+  // Initialize metatensor system object
+  auto options = MetatomicSystemOptions{
+    this->type_mapping,
+    mta_data->max_cutoff,
+    mta_data->check_consistency,
+    !(mta_data->non_conservative),
+  };
+  this->system_adaptor = std::make_unique<MetatomicSystemAdaptor>(lmp, options);
+
+  // We ask LAMMPS for a full neighbor lists because we need to know about
+  // ALL pairs, even if options->full_list() is false. We will then filter
+  // the pairs to only include each pair once where needed.
+  auto request = neighbor->add_request(this, NeighConst::REQ_FULL | NeighConst::REQ_GHOST);
+  request->set_cutoff(mta_data->max_cutoff);
+
+  // Translate from the metatomic neighbor lists requests to LAMMPS neighbor
+  // lists requests.
+  auto requested_nl = mta_data->model->run_method("requested_neighbor_lists");
+  for (const auto& ivalue: requested_nl.toList()) {
+      auto options = ivalue.get().toCustomClass<metatomic_torch::NeighborListOptionsHolder>();
+      auto cutoff = options->engine_cutoff(mta_data->evaluation_options->length_unit());
+      std::cout << "cutoff = " << cutoff << std::endl;
+      std::cout << "mta_data->max_cutoff = " << mta_data->max_cutoff << std::endl;
+      assert(cutoff <= mta_data->max_cutoff);
+
+      this->system_adaptor->add_nl_request(cutoff, options);
+  }
+}
+
+std::vector<torch::DeviceType> FixFlashMD::available_devices() {
+    auto devices = std::vector<torch::DeviceType>();
+    for (const auto& supported: this->mta_data->capabilities->supported_devices) {
+        if (supported == "cpu") {
+            devices.push_back(torch::kCPU);
+        } else if (supported == "cuda" && torch::cuda::is_available()) {
+            devices.push_back(torch::kCUDA);
+        } else if (supported == "mps") {
+            #if TORCH_VERSION_MAJOR >= 2
+            if (torch::mps::is_available()) {
+                devices.push_back(torch::kMPS);
+            }
+            #endif
+        } else {
+            error->warning(FLERR,
+                "the model declared support for unknown device '{}', it will be ignored", supported
+            );
+        }
+    }
+
+    if (devices.empty()) {
+        error->all(FLERR,
+            "failed to find a valid device for this model: "
+            "the model supports {}, none of these where available",
+            torch::str(this->mta_data->capabilities->supported_devices)
+        );
+    }
+
+    return devices;
+}
+
+void FixFlashMD::pick_device(torch::Device* device, const char* requested) {
+    auto available_devices = this->available_devices();
+
+    auto picked_device_type = torch::kCPU;
+    if (requested == nullptr) {
+        // no user request, pick the device the model prefers
+        picked_device_type = available_devices[0];
+    } else {
+        bool found_requested_device = false;
+        for (const auto& device_type: available_devices) {
+            if (device_type == torch::kCPU && strcmp(requested, "cpu") == 0) {
+                picked_device_type = device_type;
+                found_requested_device = true;
+                break;
+            } else if (device_type == torch::kCUDA && strcmp(requested, "cuda") == 0) {
+                picked_device_type = device_type;
+                found_requested_device = true;
+                break;
+            } else if (device_type == torch::kMPS && strcmp(requested, "mps") == 0) {
+                picked_device_type = device_type;
+                found_requested_device = true;
+                break;
+            }
+        }
+
+        if (!found_requested_device) {
+            error->all(FLERR,
+                "failed to find requested device ({}): it is either "
+                "not supported by this model or not available on this machine",
+                requested
+            );
+        }
+    }
+
+    if (picked_device_type == torch::kCUDA) {
+        // distribute GPUs between multiple MPI processes on the same node
+
+        // (1) get a MPI communicator for all processes on the current node
+        MPI_Comm local;
+        MPI_Comm_split_type(world, MPI_COMM_TYPE_SHARED, 0, MPI_INFO_NULL, &local);
+        // (2) get the rank of this MPI process on the current node
+        int local_rank;
+        MPI_Comm_rank(local, &local_rank);
+
+        int size;
+        MPI_Comm_size(local, &size);
+        if (size < torch::cuda::device_count()) {
+            if (comm->me == 0) {
+                error->warning(FLERR,
+                    "found {} CUDA-capable GPUs, but only {} MPI processes on the current node; the remaining GPUs will not be used",
+                    torch::cuda::device_count(), size
+                );
+            }
+        }
+
+        // (3) split GPUs between node-local processes using round-robin allocation
+        int gpu_to_use = local_rank % torch::cuda::device_count();
+        *device = torch::Device(picked_device_type, gpu_to_use);
+    } else {
+        *device = torch::Device(picked_device_type);
+    }
+}
+
+void FixFlashMD::init_list(int id, NeighList *ptr) {
+  mta_list = ptr;
 }
 
 void FixFlashMD::initial_integrate(int /*vflag*/)
@@ -151,11 +345,126 @@ void FixFlashMD::initial_integrate(int /*vflag*/)
   double **v = atom->v;
   double **f = atom->f;
   double *rmass = atom->rmass;
+
   double *mass = atom->mass;
   int *type = atom->type;
   int *mask = atom->mask;
   int nlocal = atom->nlocal;
   if (igroup == atom->firstgroup) nlocal = atom->nfirst;
+  int nghost = atom->nghost;
+  int nall = nlocal + nghost;
+
+  auto dtype = torch::kFloat64;
+  if (mta_data->capabilities->dtype() == "float64") {
+      dtype = torch::kFloat64;
+  } else if (mta_data->capabilities->dtype() == "float32") {
+      dtype = torch::kFloat32;
+  } else {
+      error->all(FLERR, "the model requested an unsupported dtype '{}'", mta_data->capabilities->dtype());
+  }
+
+  // transform from LAMMPS to metatomic System
+  auto system = this->system_adaptor->system_from_lmp(
+      mta_list,
+      static_cast<bool>(vflag_global),
+      mta_data->remap_pairs,
+      dtype,
+      mta_data->device
+  );
+
+  {
+    // gather velocities in a tensor and ship to device
+    auto float_tensor_options = torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU);
+    auto velocities = torch::from_blob(
+        // atom->v contains "real" and then ghost atoms, in that order
+        *v, {nall, 3},
+        // since FlashMD is not a force field, there's no need to allocate space to store gradients
+        float_tensor_options.requires_grad(false)
+    ).to(mta_data->device);
+
+    // gather masses (per-atom) in a tensor and ship
+    torch::Tensor masses;
+    if (rmass) {
+        masses = torch::from_blob(
+            rmass, {nall},
+            float_tensor_options.requires_grad(false)
+        ).to(mta_data->device);
+    } else {
+        // need to map from atom type to mass
+        std::vector<double> masses_vector(nall);
+        for (int i=0; i<nall; i++) {
+            masses_vector[i] = mass[type[i]];
+        }
+        masses = torch::from_blob(
+            masses_vector.data(), {nall},
+            float_tensor_options.requires_grad(false)
+        ).to(mta_data->device);
+    }
+
+    // compute momenta = mass * velocity
+    auto momenta = masses.unsqueeze(1) * velocities;
+    std::cout << "moment.shape = " << momenta.sizes() << std::endl;
+
+    // define TensorBlock
+    auto keys = metatensor_torch::LabelsHolder::single()->to(mta_data->device);
+    auto values = momenta.unsqueeze(-1); // add property dimension
+
+    // define samples
+    auto label_tensor_options = torch::TensorOptions().dtype(torch::kInt32).device(mta_data->device);
+    auto sample_value_components = std::vector<torch::Tensor>{
+        torch::zeros(nall, label_tensor_options).unsqueeze(1),
+        torch::arange(nall, label_tensor_options).unsqueeze(1)
+    };
+    auto sample_values = torch::column_stack(sample_value_components);
+    metatensor_torch::Labels samples = torch::make_intrusive<metatensor_torch::LabelsHolder>(
+        std::vector<std::string>{"system", "atom"}, sample_values
+    );
+
+    // define components
+    auto component_values = torch::arange(3, label_tensor_options).unsqueeze(1);
+    metatensor_torch::Labels components = torch::make_intrusive<metatensor_torch::LabelsHolder>(
+        std::vector<std::string>{"xyz"}, component_values
+    );
+
+    auto properties = metatensor_torch::LabelsHolder::single()->to(mta_data->device);
+    auto block = torch::make_intrusive<metatensor_torch::TensorBlockHolder>(
+      // TODO: is there a way to check what dtype the model expects for input data?
+      values.to(torch::TensorOptions().dtype(torch::kFloat32)),
+      samples,
+      std::vector<metatensor_torch::Labels>{components},
+      properties
+    );
+    auto blocks = std::vector<metatensor_torch::TensorBlock>{block};
+    auto tmap = torch::make_intrusive<metatensor_torch::TensorMapHolder>(keys, blocks);
+    system->add_data("momenta", tmap, /*override=*/true);
+  }
+
+  // only run the calculation for atoms actually in the current domain
+  mta_data->selected_atoms_values.resize_({atom->nlocal, 2});
+  mta_data->selected_atoms_values.index_put_({torch::indexing::Slice(), 0}, 0);
+  auto options = mta_data->selected_atoms_values.options();
+  mta_data->selected_atoms_values.index_put_(
+      {torch::indexing::Slice(), 1},
+      torch::arange(atom->nlocal, options)
+  );
+
+  auto selected_atoms = torch::make_intrusive<metatensor_torch::LabelsHolder>(
+      std::vector<std::string>{"system", "atom"}, mta_data->selected_atoms_values
+  );
+  mta_data->evaluation_options->set_selected_atoms(selected_atoms);
+
+  torch::IValue result_ivalue;
+  try {
+      result_ivalue = mta_data->model->forward({
+          std::vector<metatomic_torch::System>{system},
+          mta_data->evaluation_options,
+          mta_data->check_consistency
+      });
+  } catch (const std::exception& e) {
+      error->all(FLERR, "error evaluating the torch model: {}", e.what());
+  }
+
+  std::cout << "result_ivalue = " << result_ivalue << std::endl;
 
   // if (rmass) {
   //   for (int i = 0; i < nlocal; i++)

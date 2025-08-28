@@ -22,18 +22,37 @@ FixStyle(flashmd,FixFlashMD);
 
 #include "fix.h"
 
+#include <metatomic/torch.hpp>
+
 namespace LAMMPS_NS {
+class MetatomicSystemAdaptor;
+class PairMetatomicData;
 
 class FixFlashMD : public Fix {
  public:
   FixFlashMD(class LAMMPS *, int, char **);
+  ~FixFlashMD();
 
   int setmask() override;
   void init() override;
+  std::vector<torch::DeviceType> available_devices();
+  void pick_device(torch::Device* device, const char* requested);
   void initial_integrate(int) override;
+  void init_list(int id, NeighList *ptr) override;
 
  protected:
   double dt;
+  std::string model_path;
+  std::string requested_device;
+   
+  PairMetatomicData* mta_data;
+  NeighList *mta_list;
+  int mta_list_reqid;
+
+  // mapping from LAMMPS types to metatomic types
+  int32_t *type_mapping;
+  // Helper class to convert between LAMMPS and metatomic.
+  std::unique_ptr<MetatomicSystemAdaptor> system_adaptor;
 };
 
 }    // namespace LAMMPS_NS
