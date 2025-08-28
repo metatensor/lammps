@@ -48,16 +48,16 @@ PairMetatomicData::PairMetatomicData(std::string length_unit, std::string energy
         // FlashMD needs position change delta-q and momenta p
         auto delta_q = torch::make_intrusive<metatomic_torch::ModelOutputHolder>();
         delta_q->explicit_gradients = {};
-        delta_q->set_quantity("length");
+        delta_q->set_quantity("energy");
         // TODO: the position change unit and momentum unit shouldn't be energy, but that needs to be changed in the model first
-        delta_q->set_unit("angstrom");
+        delta_q->set_unit("eV");
         delta_q->per_atom = true;
         this->evaluation_options->outputs.insert("mtt::delta_64_q", delta_q);
 
         auto p = torch::make_intrusive<metatomic_torch::ModelOutputHolder>();
         p->explicit_gradients = {};
-        p->set_quantity("momentum");
-        p->set_unit("sqrt(eV*u)");
+        p->set_quantity("energy");
+        p->set_unit("eV");
         p->per_atom = true;
         this->evaluation_options->outputs.insert("mtt::p_64", p);
     }

@@ -372,9 +372,51 @@ void FixFlashMD::initial_integrate(int /*vflag*/)
       mta_data->device
   );
 
+  // gather masses (per-atom) in a tensor and ship to device
+  auto float_tensor_options = torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU);
+  torch::Tensor masses;
+  if (rmass) {
+      masses = torch::from_blob(
+          rmass, {nall},
+          float_tensor_options.requires_grad(false)
+      ).to(mta_data->device);
+  } else {
+      // need to map from atom type to mass
+      std::vector<double> masses_vector(nall);
+      for (int i=0; i<nall; i++) {
+          masses_vector[i] = mass[type[i]];
+      }
+      masses = torch::from_blob(
+          masses_vector.data(), {nall},
+          float_tensor_options.requires_grad(false)
+      ).to(mta_data->device);
+  }
+  
+  auto label_tensor_options = torch::TensorOptions().dtype(torch::kInt32).device(mta_data->device);
+  // add masses to system
+  {
+    metatensor_torch::Labels keys = metatensor_torch::LabelsHolder::single()->to(mta_data->device);
+    auto samples_tensor = torch::column_stack({
+        torch::zeros(nall, label_tensor_options).unsqueeze(1),
+        torch::arange(nall, label_tensor_options).unsqueeze(1)
+    });
+    metatensor_torch::Labels samples = torch::make_intrusive<metatensor_torch::LabelsHolder>(
+      std::vector<std::string>{"system","atom"}, samples_tensor);
+    auto properties = metatensor_torch::LabelsHolder::single()->to(mta_data->device);
+    auto block = torch::make_intrusive<metatensor_torch::TensorBlockHolder>(
+      masses.to(torch::TensorOptions().dtype(torch::kFloat32)).unsqueeze(-1),  // add property dimension
+      samples,
+      std::vector<metatensor_torch::Labels>{},
+      properties
+    );
+    auto blocks = std::vector<metatensor_torch::TensorBlock>{block};
+    auto tmap = torch::make_intrusive<metatensor_torch::TensorMapHolder>(keys, blocks);
+    system->add_data("masses", tmap, /*override=*/true);
+  }
+
+  // add momenta to the system
   {
     // gather velocities in a tensor and ship to device
-    auto float_tensor_options = torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU);
     auto velocities = torch::from_blob(
         // atom->v contains "real" and then ghost atoms, in that order
         *v, {nall, 3},
@@ -382,35 +424,14 @@ void FixFlashMD::initial_integrate(int /*vflag*/)
         float_tensor_options.requires_grad(false)
     ).to(mta_data->device);
 
-    // gather masses (per-atom) in a tensor and ship
-    torch::Tensor masses;
-    if (rmass) {
-        masses = torch::from_blob(
-            rmass, {nall},
-            float_tensor_options.requires_grad(false)
-        ).to(mta_data->device);
-    } else {
-        // need to map from atom type to mass
-        std::vector<double> masses_vector(nall);
-        for (int i=0; i<nall; i++) {
-            masses_vector[i] = mass[type[i]];
-        }
-        masses = torch::from_blob(
-            masses_vector.data(), {nall},
-            float_tensor_options.requires_grad(false)
-        ).to(mta_data->device);
-    }
-
     // compute momenta = mass * velocity
     auto momenta = masses.unsqueeze(1) * velocities;
-    std::cout << "moment.shape = " << momenta.sizes() << std::endl;
 
     // define TensorBlock
     auto keys = metatensor_torch::LabelsHolder::single()->to(mta_data->device);
     auto values = momenta.unsqueeze(-1); // add property dimension
 
     // define samples
-    auto label_tensor_options = torch::TensorOptions().dtype(torch::kInt32).device(mta_data->device);
     auto sample_value_components = std::vector<torch::Tensor>{
         torch::zeros(nall, label_tensor_options).unsqueeze(1),
         torch::arange(nall, label_tensor_options).unsqueeze(1)
