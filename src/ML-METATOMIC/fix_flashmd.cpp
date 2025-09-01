@@ -59,6 +59,8 @@ FixFlashMD::FixFlashMD(LAMMPS *lmp, int narg, char **arg) :
       error->all(FLERR, "unsupported units '{}' for fix flashmd ", update->unit_style);
   }
 
+  std::cout << "FixFlashMD using units: length = " << length_unit << ", energy = " << energy_unit << std::endl;
+
   if (narg < 4) error->all(FLERR, "Illegal fix flashmd command");
 
   bool types_are_set = false;
@@ -229,6 +231,7 @@ void FixFlashMD::init()
   for (const auto& ivalue: requested_nl.toList()) {
       auto options = ivalue.get().toCustomClass<metatomic_torch::NeighborListOptionsHolder>();
       auto cutoff = options->engine_cutoff(mta_data->evaluation_options->length_unit());
+      std::cout << "raw cutoff = " << options->cutoff() << std::endl;
       std::cout << "cutoff = " << cutoff << std::endl;
       std::cout << "mta_data->max_cutoff = " << mta_data->max_cutoff << std::endl;
       assert(cutoff <= mta_data->max_cutoff);
@@ -346,13 +349,24 @@ void FixFlashMD::initial_integrate(int /*vflag*/)
   double **f = atom->f;
   double *rmass = atom->rmass;
 
+  int nlocal = atom->nlocal;
+  int nghost = atom->nghost;
+  int nall = nlocal + nghost;
+  
+  // print positions
+  for (int idx = 0; idx < 4; idx++)
+  {
+      std::cout << "atom " << idx << ": pos = (" << x[idx][0] << ", " << x[idx][1] << ", " << x[idx][2] << ")\n";
+  }
+
+
   double *mass = atom->mass;
   int *type = atom->type;
   int *mask = atom->mask;
-  int nlocal = atom->nlocal;
   if (igroup == atom->firstgroup) nlocal = atom->nfirst;
-  int nghost = atom->nghost;
-  int nall = nlocal + nghost;
+  std::cout << "nlocal = " << nlocal << std::endl;
+  std::cout << "nghost = " << nghost << std::endl;
+  std::cout << "nall = " << nall << std::endl;
 
   auto dtype = torch::kFloat64;
   if (mta_data->capabilities->dtype() == "float64") {
@@ -474,8 +488,18 @@ void FixFlashMD::initial_integrate(int /*vflag*/)
   );
   mta_data->evaluation_options->set_selected_atoms(selected_atoms);
 
+  // call the model to get delta-positions and updated momenta
   torch::IValue result_ivalue;
   try {
+    // print system's neighbor list
+    auto requested_nl = mta_data->model->run_method("requested_neighbor_lists");
+    for (const auto& ivalue: requested_nl.toList()) {
+          auto options = ivalue.get().toCustomClass<metatomic_torch::NeighborListOptionsHolder>();
+      auto nl = system->get_neighbor_list(options);
+      std::cout << "nl block: " << nl->values() << std::endl;
+    }
+
+    // run the model
       result_ivalue = mta_data->model->forward({
           std::vector<metatomic_torch::System>{system},
           mta_data->evaluation_options,
@@ -485,30 +509,30 @@ void FixFlashMD::initial_integrate(int /*vflag*/)
       error->all(FLERR, "error evaluating the torch model: {}", e.what());
   }
 
-  std::cout << "result_ivalue = " << result_ivalue << std::endl;
+  // apply the results to LAMMPS atoms
+  auto result = result_ivalue.toGenericDict();
 
-  // if (rmass) {
-  //   for (int i = 0; i < nlocal; i++)
-  //     if (mask[i] & groupbit) {
-  //       dtfm = dtf / rmass[i];
-  //       v[i][0] += dtfm * f[i][0];
-  //       v[i][1] += dtfm * f[i][1];
-  //       v[i][2] += dtfm * f[i][2];
-  //       x[i][0] += dtv * v[i][0];
-  //       x[i][1] += dtv * v[i][1];
-  //       x[i][2] += dtv * v[i][2];
-  //     }
+  // extract position updates
+  auto delta_positions_map = result.at("mtt::delta_64_q").toCustomClass<metatensor_torch::TensorMapHolder>();
+  auto delta_positions_block = metatensor_torch::TensorMapHolder::block_by_id(delta_positions_map, 0);
+  auto delta_positions = delta_positions_block->values().squeeze(-1).to(torch::kCPU).to(torch::kFloat64);
 
-  // } else {
-  //   for (int i = 0; i < nlocal; i++)
-  //     if (mask[i] & groupbit) {
-  //       dtfm = dtf / mass[type[i]];
-  //       v[i][0] += dtfm * f[i][0];
-  //       v[i][1] += dtfm * f[i][1];
-  //       v[i][2] += dtfm * f[i][2];
-  //       x[i][0] += dtv * v[i][0];
-  //       x[i][1] += dtv * v[i][1];
-  //       x[i][2] += dtv * v[i][2];
-  //     }
-  // }
+  // extract momenta updates
+  auto updated_momenta_map = result.at("mtt::p_64").toCustomClass<metatensor_torch::TensorMapHolder>();
+  auto updated_momenta_block = metatensor_torch::TensorMapHolder::block_by_id(updated_momenta_map, 0);
+  auto updated_momenta = updated_momenta_block->values().squeeze(-1).to(torch::kCPU).to(torch::kFloat64);
+
+  for (int i = 0; i < nlocal; i++) {
+      if (mask[i] & groupbit) {
+          // update positions
+          x[i][0] += 0 * delta_positions[i][0].item<double>();
+          x[i][1] += 0 * delta_positions[i][1].item<double>();
+          x[i][2] += 0 * delta_positions[i][2].item<double>();
+
+          // update velocities based on new momenta
+          v[i][0] = 0 * updated_momenta[i][0].item<double>() / masses[i].item<double>();
+          v[i][1] = 0 * updated_momenta[i][1].item<double>() / masses[i].item<double>();
+          v[i][2] = 0 * updated_momenta[i][2].item<double>() / masses[i].item<double>();
+      }
+  }
 }

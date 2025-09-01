@@ -44,6 +44,9 @@ MetatomicSystemAdaptor::MetatomicSystemAdaptor(LAMMPS *lmp, MetatomicSystemOptio
 MetatomicSystemAdaptor::~MetatomicSystemAdaptor() {}
 
 void MetatomicSystemAdaptor::add_nl_request(double cutoff, metatomic_torch::NeighborListOptions request) {
+    std::cout << "cutoff = " << cutoff << std::endl;
+    std::cout << "request.cutoff() = " << request->cutoff() << std::endl;
+
     if (cutoff > options_.interaction_range) {
         error->all(FLERR,
             "Invalid metatomic model: one of the requested neighbor lists "
