@@ -59,8 +59,6 @@ FixFlashMD::FixFlashMD(LAMMPS *lmp, int narg, char **arg) :
       error->all(FLERR, "unsupported units '{}' for fix flashmd ", update->unit_style);
   }
 
-  std::cout << "FixFlashMD using units: length = " << length_unit << ", energy = " << energy_unit << std::endl;
-
   if (narg < 4) error->all(FLERR, "Illegal fix flashmd command");
 
   bool types_are_set = false;
@@ -128,11 +126,6 @@ FixFlashMD::FixFlashMD(LAMMPS *lmp, int narg, char **arg) :
   for (int i = 1; i <= atom->ntypes; i++) {
     type_mapping[i] = parsed_types[i - 1];
   }
-
-  std::cout << "types_are_set = " << types_are_set << std::endl;
-  std::cout << "energy_model_path = " << energy_model_path << std::endl;
-  std::cout << "model_path = " << model_path << std::endl;
-  std::cout << "requested_device = " << requested_device << std::endl;
 
   this->mta_data = new PairMetatomicData(std::move(length_unit), std::move(energy_unit), true);
 
@@ -231,9 +224,6 @@ void FixFlashMD::init()
   for (const auto& ivalue: requested_nl.toList()) {
       auto options = ivalue.get().toCustomClass<metatomic_torch::NeighborListOptionsHolder>();
       auto cutoff = options->engine_cutoff(mta_data->evaluation_options->length_unit());
-      std::cout << "raw cutoff = " << options->cutoff() << std::endl;
-      std::cout << "cutoff = " << cutoff << std::endl;
-      std::cout << "mta_data->max_cutoff = " << mta_data->max_cutoff << std::endl;
       assert(cutoff <= mta_data->max_cutoff);
 
       this->system_adaptor->add_nl_request(cutoff, options);
@@ -353,24 +343,10 @@ void FixFlashMD::initial_integrate(int /*vflag*/)
   int nghost = atom->nghost;
   int nall = nlocal + nghost;
   
-  // print positions
-  for (int idx = 0; idx < nlocal; idx++)
-  {
-      std::cout << "atom " << idx << ": pos = (" << x[idx][0] << ", " << x[idx][1] << ", " << x[idx][2] << ")\n";
-  }
-  for (int idx = 0; idx < nlocal; idx++)
-  {
-      std::cout << "atom " << idx << ": vel = (" << v[idx][0] << ", " << v[idx][1] << ", " << v[idx][2] << ")\n";
-  }
-
-
   double *mass = atom->mass;
   int *type = atom->type;
   int *mask = atom->mask;
   if (igroup == atom->firstgroup) nlocal = atom->nfirst;
-  std::cout << "nlocal = " << nlocal << std::endl;
-  std::cout << "nghost = " << nghost << std::endl;
-  std::cout << "nall = " << nall << std::endl;
 
   auto dtype = torch::kFloat64;
   if (mta_data->capabilities->dtype() == "float64") {
@@ -495,20 +471,6 @@ void FixFlashMD::initial_integrate(int /*vflag*/)
   // call the model to get delta-positions and updated momenta
   torch::IValue result_ivalue;
   try {
-    // print system's neighbor list
-    auto requested_nl = mta_data->model->run_method("requested_neighbor_lists");
-    for (const auto& ivalue: requested_nl.toList()) {
-          auto options = ivalue.get().toCustomClass<metatomic_torch::NeighborListOptionsHolder>();
-      auto nl = system->get_neighbor_list(options);
-      //std::cout << "nl block: " << nl->values() << std::endl;
-    }
-
-    // debug: print the system
-    std::cout << "system->positions: " << system->positions() << std::endl;
-    std::cout << "system->cell: " << system->cell() << std::endl;
-    std::cout << "system->pbc: " << system->pbc() << std::endl;
-    //std::cout << "system->types: " << system->types() << std::endl;
-
     // run the model
       result_ivalue = mta_data->model->forward({
           std::vector<metatomic_torch::System>{system},
@@ -518,7 +480,6 @@ void FixFlashMD::initial_integrate(int /*vflag*/)
   } catch (const std::exception& e) {
       error->all(FLERR, "error evaluating the torch model: {}", e.what());
   }
-
 
   // apply the results to LAMMPS atoms
   auto result = result_ivalue.toGenericDict();
@@ -533,43 +494,17 @@ void FixFlashMD::initial_integrate(int /*vflag*/)
   auto updated_momenta_block = metatensor_torch::TensorMapHolder::block_by_id(updated_momenta_map, 0);
   auto updated_momenta = updated_momenta_block->values().squeeze(-1).to(torch::kCPU).to(torch::kFloat64);
 
-
-  // print the positions
-  for (int idx = 0; idx < nlocal; idx++)
-  {
-     std::cout << "delta pos atom " << idx << ": (" << delta_positions[idx][0].item<double>() << ", " << delta_positions[idx][1].item<double>() << ", " << delta_positions[idx][2].item<double>() << ")\n";
-  }
-  
-
-  // print the outputs
-  for (int idx = 0; idx < nlocal; idx++)
-  {
-     std::cout << "updated momenta atom " << idx << ": (" << updated_momenta[idx][0].item<double>() << ", " << updated_momenta[idx][1].item<double>() << ", " << updated_momenta[idx][2].item<double>() << ")\n";
-  }
-
-
-  // print masses
   for (int i = 0; i < nlocal; i++) {
       if (mask[i] & groupbit) {
           // update positions
-          float scale = 1.;
-          x[i][0] += scale * delta_positions[i][0].item<double>() / std::sqrt(masses[i].item<double>());
-          x[i][1] += scale * delta_positions[i][1].item<double>() / std::sqrt(masses[i].item<double>());
-          x[i][2] += scale * delta_positions[i][2].item<double>() / std::sqrt(masses[i].item<double>());
+          x[i][0] += delta_positions[i][0].item<double>() / std::sqrt(masses[i].item<double>());
+          x[i][1] += delta_positions[i][1].item<double>() / std::sqrt(masses[i].item<double>());
+          x[i][2] += delta_positions[i][2].item<double>() / std::sqrt(masses[i].item<double>());
 
           // update velocities based on new momenta
-          v[i][0] =scale * updated_momenta[i][0].item<double>() / std::sqrt(masses[i].item<double>());
-          v[i][1] =scale * updated_momenta[i][1].item<double>() / std::sqrt(masses[i].item<double>());
-          v[i][2] = scale * updated_momenta[i][2].item<double>() / std::sqrt(masses[i].item<double>());
+          v[i][0] = updated_momenta[i][0].item<double>() / std::sqrt(masses[i].item<double>());
+          v[i][1] = updated_momenta[i][1].item<double>() / std::sqrt(masses[i].item<double>());
+          v[i][2] = updated_momenta[i][2].item<double>() / std::sqrt(masses[i].item<double>());
       }
-  }
-  std::cout << "After update.\n";
-  for (int idx = 0; idx < nlocal; idx++)
-  {
-      std::cout << "atom " << idx << ": pos = (" << x[idx][0] << ", " << x[idx][1] << ", " << x[idx][2] << ")\n";
-  }
-  for (int idx = 0; idx < nlocal; idx++)
-  {
-      std::cout << "atom " << idx << ": vel = (" << v[idx][0] << ", " << v[idx][1] << ", " << v[idx][2] << ")\n";
   }
 }
