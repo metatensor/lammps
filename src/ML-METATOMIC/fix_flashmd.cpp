@@ -354,9 +354,13 @@ void FixFlashMD::initial_integrate(int /*vflag*/)
   int nall = nlocal + nghost;
   
   // print positions
-  for (int idx = 0; idx < 4; idx++)
+  for (int idx = 0; idx < nlocal; idx++)
   {
       std::cout << "atom " << idx << ": pos = (" << x[idx][0] << ", " << x[idx][1] << ", " << x[idx][2] << ")\n";
+  }
+  for (int idx = 0; idx < nlocal; idx++)
+  {
+      std::cout << "atom " << idx << ": vel = (" << v[idx][0] << ", " << v[idx][1] << ", " << v[idx][2] << ")\n";
   }
 
 
@@ -496,8 +500,14 @@ void FixFlashMD::initial_integrate(int /*vflag*/)
     for (const auto& ivalue: requested_nl.toList()) {
           auto options = ivalue.get().toCustomClass<metatomic_torch::NeighborListOptionsHolder>();
       auto nl = system->get_neighbor_list(options);
-      std::cout << "nl block: " << nl->values() << std::endl;
+      //std::cout << "nl block: " << nl->values() << std::endl;
     }
+
+    // debug: print the system
+    std::cout << "system->positions: " << system->positions() << std::endl;
+    std::cout << "system->cell: " << system->cell() << std::endl;
+    std::cout << "system->pbc: " << system->pbc() << std::endl;
+    //std::cout << "system->types: " << system->types() << std::endl;
 
     // run the model
       result_ivalue = mta_data->model->forward({
@@ -508,6 +518,7 @@ void FixFlashMD::initial_integrate(int /*vflag*/)
   } catch (const std::exception& e) {
       error->all(FLERR, "error evaluating the torch model: {}", e.what());
   }
+
 
   // apply the results to LAMMPS atoms
   auto result = result_ivalue.toGenericDict();
@@ -522,17 +533,43 @@ void FixFlashMD::initial_integrate(int /*vflag*/)
   auto updated_momenta_block = metatensor_torch::TensorMapHolder::block_by_id(updated_momenta_map, 0);
   auto updated_momenta = updated_momenta_block->values().squeeze(-1).to(torch::kCPU).to(torch::kFloat64);
 
+
+  // print the positions
+  for (int idx = 0; idx < nlocal; idx++)
+  {
+     std::cout << "delta pos atom " << idx << ": (" << delta_positions[idx][0].item<double>() << ", " << delta_positions[idx][1].item<double>() << ", " << delta_positions[idx][2].item<double>() << ")\n";
+  }
+  
+
+  // print the outputs
+  for (int idx = 0; idx < nlocal; idx++)
+  {
+     std::cout << "updated momenta atom " << idx << ": (" << updated_momenta[idx][0].item<double>() << ", " << updated_momenta[idx][1].item<double>() << ", " << updated_momenta[idx][2].item<double>() << ")\n";
+  }
+
+
+  // print masses
   for (int i = 0; i < nlocal; i++) {
       if (mask[i] & groupbit) {
           // update positions
-          x[i][0] += 0 * delta_positions[i][0].item<double>();
-          x[i][1] += 0 * delta_positions[i][1].item<double>();
-          x[i][2] += 0 * delta_positions[i][2].item<double>();
+          float scale = 1.;
+          x[i][0] += scale * delta_positions[i][0].item<double>() / std::sqrt(masses[i].item<double>());
+          x[i][1] += scale * delta_positions[i][1].item<double>() / std::sqrt(masses[i].item<double>());
+          x[i][2] += scale * delta_positions[i][2].item<double>() / std::sqrt(masses[i].item<double>());
 
           // update velocities based on new momenta
-          v[i][0] = 0 * updated_momenta[i][0].item<double>() / masses[i].item<double>();
-          v[i][1] = 0 * updated_momenta[i][1].item<double>() / masses[i].item<double>();
-          v[i][2] = 0 * updated_momenta[i][2].item<double>() / masses[i].item<double>();
+          v[i][0] =scale * updated_momenta[i][0].item<double>() / std::sqrt(masses[i].item<double>());
+          v[i][1] =scale * updated_momenta[i][1].item<double>() / std::sqrt(masses[i].item<double>());
+          v[i][2] = scale * updated_momenta[i][2].item<double>() / std::sqrt(masses[i].item<double>());
       }
+  }
+  std::cout << "After update.\n";
+  for (int idx = 0; idx < nlocal; idx++)
+  {
+      std::cout << "atom " << idx << ": pos = (" << x[idx][0] << ", " << x[idx][1] << ", " << x[idx][2] << ")\n";
+  }
+  for (int idx = 0; idx < nlocal; idx++)
+  {
+      std::cout << "atom " << idx << ": vel = (" << v[idx][0] << ", " << v[idx][1] << ", " << v[idx][2] << ")\n";
   }
 }
