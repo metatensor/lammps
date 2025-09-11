@@ -300,7 +300,8 @@ void MetatomicSystemAdaptor::setup_neighbors_remap(metatomic_torch::System& syst
             auto _ = MetatomicTimer("creating samples Labels (" +  std::to_string(n_pairs) + " pairs)");
             samples = torch::make_intrusive<metatensor_torch::LabelsHolder>(
                 std::vector<std::string>{"first_atom", "second_atom", "cell_shift_a", "cell_shift_b", "cell_shift_c"},
-                samples_values
+                samples_values,
+                metatensor::assume_unique{}
             );
         }
 
@@ -334,7 +335,7 @@ void MetatomicSystemAdaptor::setup_neighbors_remap(metatomic_torch::System& syst
             neighbors = torch::make_intrusive<metatensor_torch::TensorBlockHolder>(
                 distances_vectors,
                 samples,
-                std::vector<metatensor_torch::TorchLabels>{
+                std::vector<metatensor_torch::Labels>{
                     metatensor_torch::LabelsHolder::create({"xyz"}, {{0}, {1}, {2}})->to(device),
                 },
                 metatensor_torch::LabelsHolder::create({"distance"}, {{0}})->to(device)
@@ -428,7 +429,8 @@ void MetatomicSystemAdaptor::setup_neighbors_no_remap(metatomic_torch::System& s
             auto _ = MetatomicTimer("creating samples Labels (" +  std::to_string(n_pairs) +" pairs)");
             samples = torch::make_intrusive<metatensor_torch::LabelsHolder>(
                 std::vector<std::string>{"first_atom", "second_atom", "cell_shift_a", "cell_shift_b", "cell_shift_c"},
-                samples_values
+                samples_values,
+                metatensor::assume_unique{}
             );
         }
 
@@ -462,7 +464,7 @@ void MetatomicSystemAdaptor::setup_neighbors_no_remap(metatomic_torch::System& s
             neighbors = torch::make_intrusive<metatensor_torch::TensorBlockHolder>(
                 distances_vectors,
                 samples,
-                std::vector<metatensor_torch::TorchLabels>{
+                std::vector<metatensor_torch::Labels>{
                     metatensor_torch::LabelsHolder::create({"xyz"}, {{0}, {1}, {2}})->to(device),
                 },
                 metatensor_torch::LabelsHolder::create({"distance"}, {{0}})->to(device)
