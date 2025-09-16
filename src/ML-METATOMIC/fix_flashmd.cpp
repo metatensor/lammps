@@ -485,26 +485,26 @@ void FixFlashMD::initial_integrate(int /*vflag*/)
   auto result = result_ivalue.toGenericDict();
 
   // extract position updates
-  auto delta_positions_map = result.at("mtt::delta_64_q").toCustomClass<metatensor_torch::TensorMapHolder>();
-  auto delta_positions_block = metatensor_torch::TensorMapHolder::block_by_id(delta_positions_map, 0);
-  auto delta_positions = delta_positions_block->values().squeeze(-1).to(torch::kCPU).to(torch::kFloat64);
+  auto positions_map = result.at("positions").toCustomClass<metatensor_torch::TensorMapHolder>();
+  auto positions_block = metatensor_torch::TensorMapHolder::block_by_id(positions_map, 0);
+  auto positions = positions_block->values().squeeze(-1).to(torch::kCPU).to(torch::kFloat64);
 
   // extract momenta updates
-  auto updated_momenta_map = result.at("mtt::p_64").toCustomClass<metatensor_torch::TensorMapHolder>();
-  auto updated_momenta_block = metatensor_torch::TensorMapHolder::block_by_id(updated_momenta_map, 0);
-  auto updated_momenta = updated_momenta_block->values().squeeze(-1).to(torch::kCPU).to(torch::kFloat64);
+  auto momenta_map = result.at("momenta").toCustomClass<metatensor_torch::TensorMapHolder>();
+  auto momenta_block = metatensor_torch::TensorMapHolder::block_by_id(momenta_map, 0);
+  auto momenta = momenta_block->values().squeeze(-1).to(torch::kCPU).to(torch::kFloat64);
 
   for (int i = 0; i < nlocal; i++) {
       if (mask[i] & groupbit) {
           // update positions
-          x[i][0] += delta_positions[i][0].item<double>() / std::sqrt(masses[i].item<double>());
-          x[i][1] += delta_positions[i][1].item<double>() / std::sqrt(masses[i].item<double>());
-          x[i][2] += delta_positions[i][2].item<double>() / std::sqrt(masses[i].item<double>());
+          x[i][0] = positions[i][0].item<double>();
+          x[i][1] = positions[i][1].item<double>();
+          x[i][2] = positions[i][2].item<double>();
 
           // update velocities based on new momenta
-          v[i][0] = updated_momenta[i][0].item<double>() / std::sqrt(masses[i].item<double>());
-          v[i][1] = updated_momenta[i][1].item<double>() / std::sqrt(masses[i].item<double>());
-          v[i][2] = updated_momenta[i][2].item<double>() / std::sqrt(masses[i].item<double>());
+          v[i][0] = momenta[i][0].item<double>();
+          v[i][1] = momenta[i][1].item<double>();
+          v[i][2] = momenta[i][2].item<double>();
       }
   }
 }

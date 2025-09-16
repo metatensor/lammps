@@ -46,20 +46,21 @@ PairMetatomicData::PairMetatomicData(std::string length_unit, std::string energy
         this->evaluation_options->outputs.insert("energy", output);
     } else {
         // FlashMD needs position change delta-q and momenta p
-        auto delta_q = torch::make_intrusive<metatomic_torch::ModelOutputHolder>();
-        delta_q->explicit_gradients = {};
-        delta_q->set_quantity("energy");
-        // TODO: the position change unit and momentum unit shouldn't be energy, but that needs to be changed in the model first
-        delta_q->set_unit("eV");
-        delta_q->per_atom = true;
-        this->evaluation_options->outputs.insert("mtt::delta_64_q", delta_q);
+        auto positions = torch::make_intrusive<metatomic_torch::ModelOutputHolder>();
+        positions->explicit_gradients = {};
+        positions->set_quantity("positions");
+        positions->set_unit("Angstrom");
+        positions->per_atom = true;
 
-        auto p = torch::make_intrusive<metatomic_torch::ModelOutputHolder>();
-        p->explicit_gradients = {};
-        p->set_quantity("energy");
-        p->set_unit("eV");
-        p->per_atom = true;
-        this->evaluation_options->outputs.insert("mtt::p_64", p);
+        this->evaluation_options->outputs.insert("positions", positions);
+
+        auto momenta = torch::make_intrusive<metatomic_torch::ModelOutputHolder>();
+        momenta->explicit_gradients = {};
+        momenta->set_quantity("momentum");
+        momenta->set_unit("(eV*u)^1/2");
+        momenta->per_atom = true;
+        
+        this->evaluation_options->outputs.insert("momenta", momenta);
     }
 }
 
