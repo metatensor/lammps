@@ -85,24 +85,16 @@ void PairMetatomicData::load_model(
            metatomic_torch::load_atomistic_model(path, extensions)
        );
    } catch (const c10::Error& e) {
-       lmp->error->all(FLERR, "failed to load metatensor model at '{}': {}", path, e.what());
+       lmp->error->all(FLERR, "failed to load metatomic model at '{}': {}", path, e.what());
    }
 
    auto capabilities_ivalue = this->model->run_method("capabilities");
    this->capabilities = capabilities_ivalue.toCustomClass<metatomic_torch::ModelCapabilitiesHolder>();
 
-   // TODO: For FlashMD, not having the energy output is fine.
-   /*if (!this->capabilities->outputs().contains("energy")) {
-       lmp->error->all(FLERR, "the model at '{}' does not have an \"energy\" output, we can not use it in pair_style metatensor", path);
-   }*/
-   // Print the available outputs
-   if (lmp->comm->me == 0) {
-        auto capabilities = this->capabilities->outputs();
-        for (const auto& it: capabilities) {
-            if (lmp->screen)  fprintf(lmp->screen,  "metatensor model output: %s\n", it.key().c_str());
-            if (lmp->logfile) fprintf(lmp->logfile, "metatensor model output: %s\n", it.key().c_str());
-        }
-    }
+
+   if (!this->capabilities->outputs().contains("energy")) {
+       lmp->error->all(FLERR, "the model at '{}' does not have an \"energy\" output, we can not use it in pair_style metatomic", path);
+   }
 
    if (lmp->comm->me == 0) {
        auto metadata_ivalue = this->model->run_method("metadata");
