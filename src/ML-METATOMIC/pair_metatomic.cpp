@@ -289,7 +289,7 @@ void PairMetatomic::pick_device(torch::Device& device, const char* requested) {
     try {
         auto device_string = metatomic_torch::pick_device(this->mta_data->capabilities->supported_devices, requested);
     } catch (const c10::Error& e) {
-        error->all(FLERR, "{}", e.what());
+        error->all(FLERR, "pair_style metatomic: {}", e.what());
     }
 
     if (device_string == "cuda") {
