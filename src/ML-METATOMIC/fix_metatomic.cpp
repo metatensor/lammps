@@ -11,6 +11,26 @@
 
    See the README file in the top-level LAMMPS directory.
 ------------------------------------------------------------------------- */
+
+/* ----------------------------------------------------------------------
+   Fix metatomic: ML-driven position and momentum prediction
+
+   This fix implements machine learning-driven molecular dynamics where a 
+   trained model predicts atomic positions and momenta at each timestep.
+   The model takes current positions, velocities (as momenta), and masses
+   as input and outputs updated positions and momenta.
+
+   Key features:
+   - Compatible with Langevin thermostats (fix langevin, fix press/langevin)
+   - Isolates stochastic forces from ML predictions via force snapshots
+   - Currently supports only 'metal' units
+   - Requires single MPI process (multi-process support in development)
+
+   The integration scheme:
+   1. initial_integrate: ML model predicts new positions and momenta
+   2. post_force: Snapshot forces (includes any added stochastic forces)
+   3. final_integrate: Apply force corrections to velocities
+------------------------------------------------------------------------- */
 #include "pair_metatomic.h"
 #include "metatomic_types.h"
 #include "metatomic_system.h"
@@ -41,6 +61,13 @@ using namespace FixConst;
 FixMetatomic::FixMetatomic(LAMMPS *lmp, int narg, char **arg) :
   Fix(lmp, narg, arg)
 {
+  // Check for multiple MPI processes - not currently supported
+  if (comm->nprocs > 1) {
+      error->all(FLERR, "fix metatomic does not support multiple MPI processes yet");
+  }
+
+  // Determine unit system for the ML model
+  // Currently only 'metal' units are fully supported for momenta
   std::string energy_unit;
   std::string length_unit;
   if (strcmp(update->unit_style, "real") == 0) {
@@ -56,7 +83,12 @@ FixMetatomic::FixMetatomic(LAMMPS *lmp, int narg, char **arg) :
       length_unit = "Bohr";
       energy_unit = "Hartree";
   } else {
-      error->all(FLERR, "unsupported units '{}' for fix metatomic ", update->unit_style);
+      error->all(FLERR, "unsupported units '{}' for fix metatomic", update->unit_style);
+  }
+
+  // For now, only metal units are fully tested and supported
+  if (strcmp(update->unit_style, "metal") != 0) {
+      error->all(FLERR, "fix metatomic currently only supports 'metal' units");
   }
 
   if (narg < 4) error->all(FLERR, "Illegal fix metatomic command");
@@ -331,8 +363,9 @@ void FixMetatomic::init_list(int id, NeighList *ptr) {
 
 void FixMetatomic::initial_integrate(int /*vflag*/)
 {
-  // update v and x of atoms in group
-
+  // This function performs ML-driven position and momentum updates
+  // It uses a trained model to predict new positions and momenta at each timestep
+  
   double **x = atom->x;
   double **v = atom->v;
   double **f = atom->f;
@@ -417,17 +450,17 @@ void FixMetatomic::initial_integrate(int /*vflag*/)
         float_tensor_options.requires_grad(false)
     ).to(mta_data->device);
 
-    // compute momenta = mass * velocity
+    // Compute momenta = mass * velocity with unit conversion
+    // Unit conversion factor explanation (for metal units):
+    // - LAMMPS velocities are in Angstrom/ps
+    // - LAMMPS masses are in g/mol
+    // - Target momenta units: g/(mol*ps) * Angstrom = g*Angstrom/(mol*ps)
+    // - Conversion factor: 0.001 / 0.09822694743391452
+    //   where 0.09822694743391452 relates to conversion from atomic mass units to g/mol
+    //   and the energy/momentum scaling in the metatomic model
     auto momenta = masses.unsqueeze(1) * velocities * (0.001 / 0.09822694743391452);
-    // std::cout << "Momenta before:" << std::endl;
-    // std::cout << momenta.index({torch::indexing::Slice(0, nlocal), torch::indexing::Slice()}) << std::endl;
-    // exit(0);
-    // auto momenta = masses.unsqueeze(1) * velocities * 0.0;
 
-    // print only the first n_local momenta (i.e. excluding ghosts)
-    // std::cout << momenta.index({torch::indexing::Slice(0, nlocal), torch::indexing::Slice()}) << std::endl;
-
-    // define TensorBlock
+    // Create TensorBlock for momenta to pass to the ML model
     auto keys = metatensor_torch::LabelsHolder::single()->to(mta_data->device);
     auto values = momenta.unsqueeze(-1); // add property dimension
 
@@ -460,7 +493,8 @@ void FixMetatomic::initial_integrate(int /*vflag*/)
     system->add_data("momenta", tmap, /*override=*/true);
   }
 
-  // only run the calculation for atoms actually in the current domain
+  // Configure selected atoms for evaluation
+  // Only run the calculation for atoms in the current domain (exclude ghost atoms)
   mta_data->selected_atoms_values.resize_({atom->nlocal, 2});
   mta_data->selected_atoms_values.index_put_({torch::indexing::Slice(), 0}, 0);
   auto options = mta_data->selected_atoms_values.options();
@@ -474,18 +508,9 @@ void FixMetatomic::initial_integrate(int /*vflag*/)
   );
   mta_data->evaluation_options->set_selected_atoms(selected_atoms);
 
-  // std::cout << system->positions() << std::endl;
-  // std::cout << metatensor_torch::TensorMapHolder::block_by_id(system->get_data("masses"), 0)->values() << std::endl;
-  // std::cout << metatensor_torch::TensorMapHolder::block_by_id(system->get_data("momenta"), 0)->values().squeeze(-1) << std::endl;
-  // exit(0);
-  // std::cout << system->types() << std::endl;
-  // std::cout << system->cell() << std::endl;
-  // std::cout << system->pbc() << std::endl;
-
-  // call the model to get delta-positions and updated momenta
+  // Call the ML model to predict new positions and momenta
   torch::IValue result_ivalue;
   try {
-    // run the model
       result_ivalue = mta_data->model->forward({
           std::vector<metatomic_torch::System>{system},
           mta_data->evaluation_options,
@@ -495,51 +520,50 @@ void FixMetatomic::initial_integrate(int /*vflag*/)
       error->all(FLERR, "error evaluating the torch model: {}", e.what());
   }
 
-  // apply the results to LAMMPS atoms
+  // Extract results from the model output
   auto result = result_ivalue.toGenericDict();
 
-  // extract position updates
+  // Extract predicted positions
   auto positions_map = result.at("positions").toCustomClass<metatensor_torch::TensorMapHolder>();
   auto positions_block = metatensor_torch::TensorMapHolder::block_by_id(positions_map, 0);
   auto positions = positions_block->values().squeeze(-1).to(torch::kCPU).to(torch::kFloat64);
 
-  // extract momenta updates
+  // Extract predicted momenta
   auto momenta_map = result.at("momenta").toCustomClass<metatensor_torch::TensorMapHolder>();
   auto momenta_block = metatensor_torch::TensorMapHolder::block_by_id(momenta_map, 0);
   auto momenta = momenta_block->values().squeeze(-1).to(torch::kCPU).to(torch::kFloat64);
 
-  // std::cout << positions << std::endl;
-  // std::cout << momenta << std::endl;
-  // exit(0);
-  // jdgfkakjd
-
-  // std::cout << momenta << std::endl;
-  // exit(0);
-
+  // Convert momenta back from model units to LAMMPS velocity units
+  // This reverses the unit conversion applied before the model call
   momenta = momenta / (0.001 / 0.09822694743391452);
 
+  // Apply ML predictions to LAMMPS atoms
   for (int i = 0; i < nlocal; i++) {
       if (mask[i] & groupbit) {
-          // update positions
+          // Update positions with ML predictions
           x[i][0] = positions[i][0].item<double>();
           x[i][1] = positions[i][1].item<double>();
           x[i][2] = positions[i][2].item<double>();
 
-          // std::cout << "Before: " << v[i][0];
-
-          // update velocities based on new momenta
+          // Update velocities from predicted momenta
+          // Convert momenta back to velocities: v = p / m
           v[i][0] = momenta[i][0].item<double>() / masses[i].item<double>();
           v[i][1] = momenta[i][1].item<double>() / masses[i].item<double>();
           v[i][2] = momenta[i][2].item<double>() / masses[i].item<double>();
-
-          // std::cout << " After: " << v[i][0] << std::endl;
       }
   }
 }
 
 void FixMetatomic::post_force(int /*vflag*/)
 {
-  // take a snapshot of forces
+  // Take a snapshot of forces after they have been computed
+  // This is crucial for compatibility with fix langevin and fix press/langevin:
+  // - The ML model predicts positions and momenta based on conservative forces
+  // - Langevin thermostats add stochastic forces that should not affect ML predictions
+  // - By capturing forces here (post_force), we can isolate the Langevin contribution
+  // - In final_integrate, we apply only the difference (f - f_pre) as a correction
+  // - This allows Langevin forces to properly thermalize without interfering with ML dynamics
+  
   this->ensure_capacity();
 
   double **f = atom->f;
@@ -555,6 +579,15 @@ void FixMetatomic::post_force(int /*vflag*/)
 
 void FixMetatomic::final_integrate()
 {
+  // Apply velocity corrections from forces that were added after post_force
+  // This handles stochastic forces from Langevin thermostats:
+  // - initial_integrate: ML model updates positions and velocities
+  // - post_force: we snapshot forces (includes pair, bond, and Langevin forces)
+  // - Between post_force and final_integrate: additional forces may be added
+  // - final_integrate: we apply only the force difference as a velocity correction
+  // This ensures Langevin forces properly affect the dynamics while allowing
+  // the ML model to handle the deterministic evolution
+  
   double dtf = update->dt * force->ftm2v;
 
   double **x = atom->x;
@@ -566,6 +599,8 @@ void FixMetatomic::final_integrate()
   if (igroup == atom->firstgroup) nlocal = atom->nfirst;
 
   for (int i = 0; i < nlocal; i++) {
+    // Apply only the incremental force (f - f_pre) to velocities
+    // rmass is per-atom mass (if used), otherwise use type-based mass
     v[i][0] += (f[i][0] - f_pre[i][0]) * dtf / (rmass ? rmass[i] : atom->mass[atom->type[i]]);
     v[i][1] += (f[i][1] - f_pre[i][1]) * dtf / (rmass ? rmass[i] : atom->mass[atom->type[i]]);
     v[i][2] += (f[i][2] - f_pre[i][2]) * dtf / (rmass ? rmass[i] : atom->mass[atom->type[i]]);
@@ -575,6 +610,8 @@ void FixMetatomic::final_integrate()
 
 void FixMetatomic::ensure_capacity()
 {
+  // Ensure f_pre array has sufficient capacity for current number of atoms
+  // Reallocate if atom count has grown since last allocation
   if (atom->nmax > nmax) {
     this->nmax = atom->nmax;
     if (f_pre) memory->destroy(f_pre);

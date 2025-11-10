@@ -37,27 +37,33 @@ class FixMetatomic : public Fix {
   void init() override;
   std::vector<torch::DeviceType> available_devices();
   void pick_device(torch::Device* device, const char* requested);
-  void initial_integrate(int) override;
-  void post_force(int) override;
-  void final_integrate() override;
+  
+  // Integration methods for ML-driven dynamics
+  void initial_integrate(int) override;  // ML prediction of positions/momenta
+  void post_force(int) override;         // Snapshot forces for Langevin compatibility
+  void final_integrate() override;       // Apply force corrections
   void init_list(int id, NeighList *ptr) override;
 
  protected:
-  double dt;
-  std::string model_path;
-  std::string requested_device;
+  double dt;                    // Timestep
+  std::string model_path;       // Path to ML model file
+  std::string requested_device; // Device to run model on (cpu/cuda/mps)
    
+  // Metatomic model data and configuration
   PairMetatomicData* mta_data;
   NeighList *mta_list;
   int mta_list_reqid;
 
-  double **f_pre = nullptr;   // snapshot of forces at post_force() time
-  void ensure_capacity();
-  int nmax = 0;
+  // Force snapshot for Langevin compatibility
+  // Stores forces at post_force() time to isolate stochastic contributions
+  double **f_pre = nullptr;
+  void ensure_capacity();  // Ensures f_pre has sufficient capacity
+  int nmax = 0;            // Current allocated size of f_pre
 
-  // mapping from LAMMPS types to metatomic types
+  // Mapping from LAMMPS atom types to metatomic model types
   int32_t *type_mapping;
-  // Helper class to convert between LAMMPS and metatomic.
+  
+  // Helper class to convert between LAMMPS and metatomic representations
   std::unique_ptr<MetatomicSystemAdaptor> system_adaptor;
 };
 
