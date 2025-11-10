@@ -48,7 +48,7 @@ PairMetatomicData::PairMetatomicData(std::string length_unit, std::string energy
         // FlashMD needs position change delta-q and momenta p
         auto positions = torch::make_intrusive<metatomic_torch::ModelOutputHolder>();
         positions->explicit_gradients = {};
-        positions->set_quantity("positions");
+        positions->set_quantity("length");
         positions->set_unit("Angstrom");
         positions->per_atom = true;
 
@@ -92,9 +92,9 @@ void PairMetatomicData::load_model(
    this->capabilities = capabilities_ivalue.toCustomClass<metatomic_torch::ModelCapabilitiesHolder>();
 
 
-   if (!this->capabilities->outputs().contains("energy")) {
-       lmp->error->all(FLERR, "the model at '{}' does not have an \"energy\" output, we can not use it in pair_style metatomic", path);
-   }
+//    if (!this->capabilities->outputs().contains("energy")) {
+//        lmp->error->all(FLERR, "the model at '{}' does not have an \"energy\" output, we can not use it in pair_style metatomic", path);
+//    }
 
    if (lmp->comm->me == 0) {
        auto metadata_ivalue = this->model->run_method("metadata");

@@ -1,0 +1,174 @@
+LAMMPS (10 Sep 2025)
+OMP_NUM_THREADS environment is not set. Defaulting to 1 thread.
+  using 1 OpenMP thread(s) per MPI task
+Reading data file ...
+  orthogonal box = (0 0 0) to (15.659926 15.659926 15.659926)
+  1 by 1 by 1 MPI processor grid
+  reading atoms ...
+  384 atoms
+  read_data CPU = 0.001 seconds
+
+This is an unamed model
+=======================
+
+Model references
+----------------
+
+Please cite the following references when using this model:
+- about the architecture of this model:
+  * https://arxiv.org/abs/2305.19302v3
+
+Running simulation on cuda:0 device with float32 data
+
+CITE-CITE-CITE-CITE-CITE-CITE-CITE-CITE-CITE-CITE-CITE-CITE-CITE
+
+Your simulation uses code contributions which should be cited:
+- https://arxiv.org/abs/2305.19302v3
+The log file lists these citations in BibTeX format.
+
+CITE-CITE-CITE-CITE-CITE-CITE-CITE-CITE-CITE-CITE-CITE-CITE-CITE
+
+cutoff = 4.5
+request.cutoff() = 4.5
+Neighbor list info ...
+  update: every = 1 steps, delay = 0 steps, check = yes
+  max neighbors/atom: 2000, page size: 100000
+  master list distance cutoff = 15.5
+  ghost atom cutoff = 20
+  binsize = 7.75, bins = 3 3 3
+  1 neighbor lists, perpetual/occasional/extra = 1 0 0
+  (1) pair metatomic, perpetual
+      attributes: full, newton on, ghost
+      pair build: full/bin/ghost
+      stencil: full/ghost/bin/3d
+      bin: standard
+Setting up Verlet run ...
+  Unit style    : metal
+  Current step  : 0
+  Time step     : 0.008
+EFLAG_ATOM: 0
+Per MPI rank memory allocation (min/avg/max) = 80.03 | 80.03 | 80.03 Mbytes
+   Step          Temp          E_pair         E_mol          TotEng         Press          Volume    
+         0   300           -2002.745       0             -1987.893      -79224.941      3840.3351    
+EFLAG_ATOM: 0
+         1   1.0245573e+08  12441.312      0              5084679.9      1.4147522e+09  3840.3332    
+EFLAG_ATOM: 0
+ERROR: error evaluating the torch model: The following operation failed in the TorchScript interpreter.
+Traceback of TorchScript, serialized code (most recent call last):
+  File "code/__torch__/metatomic/torch/model.py", line 79, in forward
+    with _29:
+      module = self.module
+      outputs = (module).forward(systems0, (options).outputs_getter(), (options).selected_atoms_getter(), )
+                 ~~~~~~~~~~~~~~~ <--- HERE
+    if check_consistency:
+      _31 = __torch__.torch.autograd.profiler.record_function.__new__(__torch__.torch.autograd.profiler.record_function)
+  File "code/__torch__/metatrain/pet/model.py", line 91, in forward
+      _19, _20, = _17[_18]
+      torch._set_item(featurizer_inputs, _19, _20)
+    _21 = (self)._calculate_features(featurizer_inputs, use_manual_attention, )
+           ~~~~~~~~~~~~~~~~~~~~~~~~~ <--- HERE
+    node_features_list, edge_features_list, = _21
+    long_range = self.long_range
+  File "code/__torch__/metatrain/pet/model.py", line 214, in _calculate_features
+    _69 = torch.eq(featurizer_type, "feedforward")
+    if _69:
+      _71 = (self)._feedforward_featurization_impl(inputs, use_manual_attention, )
+             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ <--- HERE
+      _70 = _71
+    else:
+  File "code/__torch__/metatrain/pet/model.py", line 242, in _feedforward_featurization_impl
+    _11 = getattr(gnn_layers, "1")
+    _21 = getattr(gnn_layers, "2")
+    _73 = (_03).forward(input_node_embeddings, input_edge_embeddings, inputs["element_indices_neighbors"], inputs["edge_vectors"], inputs["padding_mask"], inputs["edge_distances"], inputs["cutoff_factors"], use_manual_attention, )
+           ~~~~~~~~~~~~ <--- HERE
+    output_node_embeddings, output_edge_embeddings, = _73
+    _74 = (torch.size(output_edge_embeddings))[0]
+  File "code/__torch__/metatrain/pet/modules/transformer.py", line 67, in forward
+    _21 = torch.slice(torch.slice(cutoff_factors2), 1, None, torch.add(max_num_tokens, 1))
+    _22 = torch.slice(_21, 2, None, torch.add(max_num_tokens, 1))
+    _23 = (trans).forward(_18, _20, _22, use_manual_attention, )
+           ~~~~~~~~~~~~~~ <--- HERE
+    output_node_embeddings, output_edge_embeddings, = _23
+    _24 = torch.lt(max_num_tokens, initial_num_tokens)
+  File "code/__torch__/metatrain/pet/modules/transformer.py", line 100, in forward
+    _0 = getattr(layers, "0")
+    _1 = getattr(layers, "1")
+    _32 = (_0).forward(node_embeddings, edge_embeddings, cutoff_factors, use_manual_attention, )
+           ~~~~~~~~~~~ <--- HERE
+    node_embeddings0, edge_embeddings2, = _32
+    _33 = (_1).forward(node_embeddings0, edge_embeddings2, cutoff_factors, use_manual_attention, )
+  File "code/__torch__/metatrain/pet/modules/transformer.py", line 138, in forward
+    _37 = torch.eq(transformer_type0, "PreLN")
+    if _37:
+      _38 = (self)._forward_pre_ln_impl(node_embeddings2, edge_embeddings4, cutoff_factors, use_manual_attention, )
+             ~~~~~~~~~~~~~~~~~~~~~~~~~~ <--- HERE
+      node_embeddings5, edge_embeddings7, = _38
+      node_embeddings4, edge_embeddings6 = node_embeddings5, edge_embeddings7
+  File "code/__torch__/metatrain/pet/modules/transformer.py", line 196, in _forward_pre_ln_impl
+      input_node_embeddings = node_embeddings
+    _47 = [input_node_embeddings, edge_embeddings]
+    tokens = torch.cat(_47, 1)
+             ~~~~~~~~~ <--- HERE
+    attention = self.attention
+    norm_attention = self.norm_attention
+
+Traceback of TorchScript, original code (most recent call last):
+  File "/home/filippo/code/virtualenvs/base/lib/python3.12/site-packages/metatomic/torch/model.py", line 429, in forward
+        # run the actual calculations
+        with record_function("Model::forward"):
+            outputs = self.module(
+                      ~~~~~~~~~~~ <--- HERE
+                systems=systems,
+                outputs=options.outputs,
+  File "/home/filippo/code/virtualenvs/base/lib/python3.12/site-packages/metatrain/pet/model.py", line 432, in forward
+            cutoff_factors=cutoff_factors,
+        )
+        node_features_list, edge_features_list = self._calculate_features(
+                                                 ~~~~~~~~~~~~~~~~~~~~~~~~ <--- HERE
+            featurizer_inputs,
+            use_manual_attention=use_manual_attention,
+  File "/home/filippo/code/virtualenvs/base/lib/python3.12/site-packages/metatrain/pet/model.py", line 568, in _calculate_features
+        """
+        if self.featurizer_type == "feedforward":
+            return self._feedforward_featurization_impl(inputs, use_manual_attention)
+                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ <--- HERE
+        else:
+            return self._residual_featurization_impl(inputs, use_manual_attention)
+  File "/home/filippo/code/virtualenvs/base/lib/python3.12/site-packages/metatrain/pet/model.py", line 596, in _feedforward_featurization_impl
+            self.combination_norms, self.combination_mlps, self.gnn_layers, strict=True
+        ):
+            output_node_embeddings, output_edge_embeddings = gnn_layer(
+                                                             ~~~~~~~~~ <--- HERE
+                input_node_embeddings,
+                input_edge_embeddings,
+  File "/home/filippo/code/virtualenvs/base/lib/python3.12/site-packages/metatrain/pet/modules/transformer.py", line 484, in forward
+        max_num_tokens = input_messages.shape[1]
+    
+        output_node_embeddings, output_edge_embeddings = self.trans(
+                                                         ~~~~~~~~~~ <--- HERE
+            node_embeddings[:, None, :],
+            edge_tokens[:, :max_num_tokens, :],
+  File "/home/filippo/code/virtualenvs/base/lib/python3.12/site-packages/metatrain/pet/modules/transformer.py", line 335, in forward
+        """
+        for layer in self.layers:
+            node_embeddings, edge_embeddings = layer(
+                                               ~~~~~ <--- HERE
+                node_embeddings, edge_embeddings, cutoff_factors, use_manual_attention
+            )
+  File "/home/filippo/code/virtualenvs/base/lib/python3.12/site-packages/metatrain/pet/modules/transformer.py", line 244, in forward
+            )
+        if self.transformer_type == "PreLN":
+            node_embeddings, edge_embeddings = self._forward_pre_ln_impl(
+                                               ~~~~~~~~~~~~~~~~~~~~~~~~~ <--- HERE
+                node_embeddings, edge_embeddings, cutoff_factors, use_manual_attention
+            )
+  File "/home/filippo/code/virtualenvs/base/lib/python3.12/site-packages/metatrain/pet/modules/transformer.py", line 165, in _forward_pre_ln_impl
+        else:
+            input_node_embeddings = node_embeddings
+        tokens = torch.cat([input_node_embeddings, edge_embeddings], dim=1)
+                 ~~~~~~~~~ <--- HERE
+        new_tokens = self.attention(
+            self.norm_attention(tokens), cutoff_factors, use_manual_attention
+RuntimeError: Sizes of tensors must match except in dimension 1. Expected size 140 but got size 68 for tensor number 1 in the list.
+ (src/ML-METATOMIC/pair_metatomic.cpp:507)
+Last input line: run 1000

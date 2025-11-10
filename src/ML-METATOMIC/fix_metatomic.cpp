@@ -15,7 +15,7 @@
 #include "metatomic_types.h"
 #include "metatomic_system.h"
 
-#include "fix_flashmd.h"
+#include "fix_metatomic.h"
 
 #include "atom.h"
 #include "memory.h"
@@ -38,7 +38,7 @@ using namespace FixConst;
 
 /* ---------------------------------------------------------------------- */
 
-FixFlashMD::FixFlashMD(LAMMPS *lmp, int narg, char **arg) :
+FixMetatomic::FixMetatomic(LAMMPS *lmp, int narg, char **arg) :
   Fix(lmp, narg, arg)
 {
   std::string energy_unit;
@@ -56,10 +56,10 @@ FixFlashMD::FixFlashMD(LAMMPS *lmp, int narg, char **arg) :
       length_unit = "Bohr";
       energy_unit = "Hartree";
   } else {
-      error->all(FLERR, "unsupported units '{}' for fix flashmd ", update->unit_style);
+      error->all(FLERR, "unsupported units '{}' for fix metatomic ", update->unit_style);
   }
 
-  if (narg < 4) error->all(FLERR, "Illegal fix flashmd command");
+  if (narg < 4) error->all(FLERR, "Illegal fix metatomic command");
 
   bool types_are_set = false;
   model_path = arg[3];
@@ -84,45 +84,45 @@ FixFlashMD::FixFlashMD(LAMMPS *lmp, int narg, char **arg) :
           break;  // stop parsing types on invalid argument to std::stoi
         }
         if (type <= 0) {
-          error->all(FLERR, "Illegal fix flashmd command: type {} should be > 0", type);
+          error->all(FLERR, "Illegal fix metatomic command: type {} should be > 0", type);
         }
         parsed_types.push_back(type);
         current_num_types++;
         if (current_num_types > atom->ntypes) {
-          error->all(FLERR, "Illegal fix flashmd command: too many types specified");
+          error->all(FLERR, "Illegal fix metatomic command: too many types specified");
         }
       }
     } else if (strcmp(arg[iarg], "energy") == 0) {
-      if (iarg + 1 > narg) error->all(FLERR, "Illegal fix flashmd command");
+      if (iarg + 1 > narg) error->all(FLERR, "Illegal fix metatomic command");
       energy_model_path = arg[iarg + 1];
       iarg += 2;
     } else if (strcmp(arg[iarg], "device") == 0) {
-      if (iarg + 1 > narg) error->all(FLERR, "Illegal fix flashmd command");
+      if (iarg + 1 > narg) error->all(FLERR, "Illegal fix metatomic command");
       requested_device = arg[iarg + 1];
       iarg += 2;
     } else if (strcmp(arg[iarg], "rescale_energy") == 0) {
-      if (iarg + 1 > narg) error->all(FLERR, "Illegal fix flashmd command");
+      if (iarg + 1 > narg) error->all(FLERR, "Illegal fix metatomic command");
       if (strcmp(arg[iarg + 1], "on") == 0) {
         rescale_energy = true;
       } else if (strcmp(arg[iarg + 1], "off") == 0) {
         rescale_energy = false;
       } else {
-        error->all(FLERR, "Illegal fix flashmd command: expected 'on' or 'off' after 'rescale_energy'");
+        error->all(FLERR, "Illegal fix metatomic command: expected 'on' or 'off' after 'rescale_energy'");
       }
       iarg += 2;
     } else {
-      error->all(FLERR, "Illegal fix flashmd command");
+      error->all(FLERR, "Illegal fix metatomic command");
     }
   }
   if (!types_are_set) {
-    error->all(FLERR, "Illegal fix flashmd command: no types specified");
+    error->all(FLERR, "Illegal fix metatomic command: no types specified");
   }
   if ((int)parsed_types.size() != atom->ntypes) {
-    error->all(FLERR, "Illegal fix flashmd command: number of types does not match number of atom types");
+    error->all(FLERR, "Illegal fix metatomic command: number of types does not match number of atom types");
   }
 
   // Allocate and fill the type-mapping (1-based indexing)
-  type_mapping = memory->create(type_mapping, atom->ntypes + 1, "FixFlashMD:type_mapping");
+  type_mapping = memory->create(type_mapping, atom->ntypes + 1, "FixMetatomic:type_mapping");
   for (int i = 1; i <= atom->ntypes; i++) {
     type_mapping[i] = parsed_types[i - 1];
   }
@@ -133,17 +133,18 @@ FixFlashMD::FixFlashMD(LAMMPS *lmp, int narg, char **arg) :
   // Note: for now we don't allow dynamic groups (dynamic_group_allow variable)
 }
 
-FixFlashMD::~FixFlashMD() {
+FixMetatomic::~FixMetatomic() {
   memory->destroy(type_mapping);
 }
 
 /* ---------------------------------------------------------------------- */
 
-int FixFlashMD::setmask()
+int FixMetatomic::setmask()
 {
   int mask = 0;
   mask |= INITIAL_INTEGRATE;
-  // mask |= FINAL_INTEGRATE;  // ??
+  mask |= POST_FORCE;
+  mask |= FINAL_INTEGRATE;
   // mask |= INITIAL_INTEGRATE_RESPA;  // ??
   // mask |= FINAL_INTEGRATE_RESPA;  // ??
   return mask;
@@ -151,10 +152,10 @@ int FixFlashMD::setmask()
 
 /* ---------------------------------------------------------------------- */
 
-void FixFlashMD::init()
+void FixMetatomic::init()
 {
   if (!type_mapping) {
-      error->all(FLERR, "FixFlashMD internal error: type_mapping not initialized");
+      error->all(FLERR, "FixMetatomic internal error: type_mapping not initialized");
   }
 
   const char *extensions_directory = nullptr;
@@ -230,7 +231,7 @@ void FixFlashMD::init()
   }
 }
 
-std::vector<torch::DeviceType> FixFlashMD::available_devices() {
+std::vector<torch::DeviceType> FixMetatomic::available_devices() {
     auto devices = std::vector<torch::DeviceType>();
     for (const auto& supported: this->mta_data->capabilities->supported_devices) {
         if (supported == "cpu") {
@@ -261,7 +262,7 @@ std::vector<torch::DeviceType> FixFlashMD::available_devices() {
     return devices;
 }
 
-void FixFlashMD::pick_device(torch::Device* device, const char* requested) {
+void FixMetatomic::pick_device(torch::Device* device, const char* requested) {
     auto available_devices = this->available_devices();
 
     auto picked_device_type = torch::kCPU;
@@ -324,14 +325,12 @@ void FixFlashMD::pick_device(torch::Device* device, const char* requested) {
     }
 }
 
-void FixFlashMD::init_list(int id, NeighList *ptr) {
+void FixMetatomic::init_list(int id, NeighList *ptr) {
   mta_list = ptr;
 }
 
-void FixFlashMD::initial_integrate(int /*vflag*/)
+void FixMetatomic::initial_integrate(int /*vflag*/)
 {
-  double dtfm;
-
   // update v and x of atoms in group
 
   double **x = atom->x;
@@ -414,12 +413,19 @@ void FixFlashMD::initial_integrate(int /*vflag*/)
     auto velocities = torch::from_blob(
         // atom->v contains "real" and then ghost atoms, in that order
         *v, {nall, 3},
-        // since FlashMD is not a force field, there's no need to allocate space to store gradients
+        // since Metatomic is not a force field, there's no need to allocate space to store gradients
         float_tensor_options.requires_grad(false)
     ).to(mta_data->device);
 
     // compute momenta = mass * velocity
-    auto momenta = masses.unsqueeze(1) * velocities;
+    auto momenta = masses.unsqueeze(1) * velocities * (0.001 / 0.09822694743391452);
+    // std::cout << "Momenta before:" << std::endl;
+    // std::cout << momenta.index({torch::indexing::Slice(0, nlocal), torch::indexing::Slice()}) << std::endl;
+    // exit(0);
+    // auto momenta = masses.unsqueeze(1) * velocities * 0.0;
+
+    // print only the first n_local momenta (i.e. excluding ghosts)
+    // std::cout << momenta.index({torch::indexing::Slice(0, nlocal), torch::indexing::Slice()}) << std::endl;
 
     // define TensorBlock
     auto keys = metatensor_torch::LabelsHolder::single()->to(mta_data->device);
@@ -468,6 +474,14 @@ void FixFlashMD::initial_integrate(int /*vflag*/)
   );
   mta_data->evaluation_options->set_selected_atoms(selected_atoms);
 
+  // std::cout << system->positions() << std::endl;
+  // std::cout << metatensor_torch::TensorMapHolder::block_by_id(system->get_data("masses"), 0)->values() << std::endl;
+  // std::cout << metatensor_torch::TensorMapHolder::block_by_id(system->get_data("momenta"), 0)->values().squeeze(-1) << std::endl;
+  // exit(0);
+  // std::cout << system->types() << std::endl;
+  // std::cout << system->cell() << std::endl;
+  // std::cout << system->pbc() << std::endl;
+
   // call the model to get delta-positions and updated momenta
   torch::IValue result_ivalue;
   try {
@@ -494,6 +508,16 @@ void FixFlashMD::initial_integrate(int /*vflag*/)
   auto momenta_block = metatensor_torch::TensorMapHolder::block_by_id(momenta_map, 0);
   auto momenta = momenta_block->values().squeeze(-1).to(torch::kCPU).to(torch::kFloat64);
 
+  // std::cout << positions << std::endl;
+  // std::cout << momenta << std::endl;
+  // exit(0);
+  // jdgfkakjd
+
+  // std::cout << momenta << std::endl;
+  // exit(0);
+
+  momenta = momenta / (0.001 / 0.09822694743391452);
+
   for (int i = 0; i < nlocal; i++) {
       if (mask[i] & groupbit) {
           // update positions
@@ -501,10 +525,59 @@ void FixFlashMD::initial_integrate(int /*vflag*/)
           x[i][1] = positions[i][1].item<double>();
           x[i][2] = positions[i][2].item<double>();
 
+          // std::cout << "Before: " << v[i][0];
+
           // update velocities based on new momenta
-          v[i][0] = momenta[i][0].item<double>();
-          v[i][1] = momenta[i][1].item<double>();
-          v[i][2] = momenta[i][2].item<double>();
+          v[i][0] = momenta[i][0].item<double>() / masses[i].item<double>();
+          v[i][1] = momenta[i][1].item<double>() / masses[i].item<double>();
+          v[i][2] = momenta[i][2].item<double>() / masses[i].item<double>();
+
+          // std::cout << " After: " << v[i][0] << std::endl;
       }
+  }
+}
+
+void FixMetatomic::post_force(int /*vflag*/)
+{
+  // take a snapshot of forces
+  this->ensure_capacity();
+
+  double **f = atom->f;
+  int nlocal = atom->nlocal;
+  if (igroup == atom->firstgroup) nlocal = atom->nfirst;
+
+  for (int i = 0; i < nlocal; i++) {
+    f_pre[i][0] = f[i][0];
+    f_pre[i][1] = f[i][1];
+    f_pre[i][2] = f[i][2];
+  }
+}
+
+void FixMetatomic::final_integrate()
+{
+  double dtf = update->dt * force->ftm2v;
+
+  double **x = atom->x;
+  double **v = atom->v;
+  double **f = atom->f;
+  double *rmass = atom->rmass;
+  int nlocal = atom->nlocal;
+  int *mask = atom->mask;
+  if (igroup == atom->firstgroup) nlocal = atom->nfirst;
+
+  for (int i = 0; i < nlocal; i++) {
+    v[i][0] += (f[i][0] - f_pre[i][0]) * dtf / (rmass ? rmass[i] : atom->mass[atom->type[i]]);
+    v[i][1] += (f[i][1] - f_pre[i][1]) * dtf / (rmass ? rmass[i] : atom->mass[atom->type[i]]);
+    v[i][2] += (f[i][2] - f_pre[i][2]) * dtf / (rmass ? rmass[i] : atom->mass[atom->type[i]]);
+  }
+}
+
+
+void FixMetatomic::ensure_capacity()
+{
+  if (atom->nmax > nmax) {
+    this->nmax = atom->nmax;
+    if (f_pre) memory->destroy(f_pre);
+    memory->create(f_pre, this->nmax, 3, "FixMetatomic::f_pre");
   }
 }

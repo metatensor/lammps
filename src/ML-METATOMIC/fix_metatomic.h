@@ -13,7 +13,7 @@
 
 #ifdef FIX_CLASS
 // clang-format off
-FixStyle(flashmd,FixFlashMD);
+FixStyle(metatomic,FixMetatomic);
 // clang-format on
 #else
 
@@ -28,16 +28,18 @@ namespace LAMMPS_NS {
 class MetatomicSystemAdaptor;
 class PairMetatomicData;
 
-class FixFlashMD : public Fix {
+class FixMetatomic : public Fix {
  public:
-  FixFlashMD(class LAMMPS *, int, char **);
-  ~FixFlashMD();
+  FixMetatomic(class LAMMPS *, int, char **);
+  ~FixMetatomic();
 
   int setmask() override;
   void init() override;
   std::vector<torch::DeviceType> available_devices();
   void pick_device(torch::Device* device, const char* requested);
   void initial_integrate(int) override;
+  void post_force(int) override;
+  void final_integrate() override;
   void init_list(int id, NeighList *ptr) override;
 
  protected:
@@ -48,6 +50,10 @@ class FixFlashMD : public Fix {
   PairMetatomicData* mta_data;
   NeighList *mta_list;
   int mta_list_reqid;
+
+  double **f_pre = nullptr;   // snapshot of forces at post_force() time
+  void ensure_capacity();
+  int nmax = 0;
 
   // mapping from LAMMPS types to metatomic types
   int32_t *type_mapping;
