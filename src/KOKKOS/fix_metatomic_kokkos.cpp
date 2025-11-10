@@ -27,6 +27,7 @@
 #include "atom_masks.h"
 #include "force.h"
 #include "update.h"
+#include "neighbor_kokkos.h"
 
 #include "atom_kokkos.h"
 #include "metatomic_system_kokkos.h"
@@ -72,30 +73,37 @@ void FixMetatomicKokkos<DeviceType>::init()
 {
   FixMetatomic::init();
 
-  // Copy type mapping from host to device for use in MetatomicSystemAdaptorKokkos
+  auto request = neighbor->find_request(this);
+  request->set_kokkos_host(
+    std::is_same_v<DeviceType, LMPHostType> &&
+    !std::is_same_v<DeviceType, LMPDeviceType>
+  );
+  request->set_kokkos_device(std::is_same_v<DeviceType, LMPDeviceType>);
+
+  // copy type mapping from host to device, to be able to give a device pointer
+  // to MetatomicSystemAdaptorKokkos
   auto type_mapping_kk_host = UnmanagedView<int32_t*, LMPHostType>(this->type_mapping, atom->ntypes + 1);
   this->type_mapping_kk = Kokkos::View<int32_t*, Kokkos::LayoutRight, DeviceType>("type_mapping_kk", atom->ntypes + 1);
   Kokkos::deep_copy(this->type_mapping_kk, type_mapping_kk_host);
 
-  // Create MetatomicSystemOptions with device pointer to type mapping
   auto options = MetatomicSystemOptions{
-      this->type_mapping_kk.data(),
-      mta_data->max_cutoff,
-      mta_data->check_consistency,
-      !(mta_data->non_conservative),
+    this->type_mapping_kk.data(),
+    mta_data->max_cutoff,
+    mta_data->check_consistency,
+    !(mta_data->non_conservative),
   };
 
-  // Override the system adaptor with the Kokkos version
+  // override the system adaptor with the kokkos version
   this->system_adaptor = std::make_unique<MetatomicSystemAdaptorKokkos<DeviceType>>(lmp, options);
 
-  // Register neighbor list requests with the new adaptor
+  // request NL with the new adaptor
   auto requested_nl = mta_data->model->run_method("requested_neighbor_lists");
   for (const auto& ivalue: requested_nl.toList()) {
-      auto options = ivalue.get().toCustomClass<metatomic_torch::NeighborListOptionsHolder>();
-      auto cutoff = options->engine_cutoff(mta_data->evaluation_options->length_unit());
-      assert(cutoff <= mta_data->max_cutoff);
+    auto options = ivalue.get().toCustomClass<metatomic_torch::NeighborListOptionsHolder>();
+    auto cutoff = options->engine_cutoff(mta_data->evaluation_options->length_unit());
+    assert(cutoff <= mta_data->max_cutoff);
 
-      this->system_adaptor->add_nl_request(cutoff, options);
+    this->system_adaptor->add_nl_request(cutoff, options);
   }
 
   // Sync mass data to device

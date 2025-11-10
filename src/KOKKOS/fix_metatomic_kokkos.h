@@ -42,7 +42,7 @@ class FixMetatomicKokkos : public FixMetatomic {
   void final_integrate() override;
 
  private:
-  void pick_device(torch::Device* device, const char* requested) override;
+  void pick_device(torch::Device* device, const char* requested);
 
   // Kokkos views for atom data
   typename AT::t_kkfloat_1d_3_lr x;
