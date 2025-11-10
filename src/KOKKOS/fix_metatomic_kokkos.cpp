@@ -292,56 +292,73 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/)
   // Extract results from the model output
   auto result = result_ivalue.toGenericDict();
 
-  // Extract predicted positions
+  // Extract predicted positions (keep on device)
   auto positions_map = result.at("positions").toCustomClass<metatensor_torch::TensorMapHolder>();
   auto positions_block = metatensor_torch::TensorMapHolder::block_by_id(positions_map, 0);
-  auto positions = positions_block->values().squeeze(-1).to(torch::kCPU).to(torch::kFloat64);
+  auto positions = positions_block->values().squeeze(-1).to(mta_data->device).to(torch::kFloat64).contiguous();
 
-  // Extract predicted momenta
+  // Extract predicted momenta (keep on device)
   auto momenta_map = result.at("momenta").toCustomClass<metatensor_torch::TensorMapHolder>();
   auto momenta_block = metatensor_torch::TensorMapHolder::block_by_id(momenta_map, 0);
-  auto momenta = momenta_block->values().squeeze(-1).to(torch::kCPU).to(torch::kFloat64);
+  auto momenta = momenta_block->values().squeeze(-1).to(mta_data->device).to(torch::kFloat64);
 
   // Convert momenta back from model units to LAMMPS velocity units
   momenta = momenta / (0.001 / 0.09822694743391452);
+  momenta = momenta.contiguous();
 
-  // Apply ML predictions to LAMMPS atoms using Kokkos parallel operations
-  auto x_host = Kokkos::create_mirror_view(x);
-  auto v_host = Kokkos::create_mirror_view(v);
-  auto mask_host = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), mask);
-  auto masses_host = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), 
-      rmass.data() ? rmass : Kokkos::View<double*, DeviceType>());
+  // Wrap torch tensors with UnmanagedView for device access
+  auto positions_kk = UnmanagedView<double**, DeviceType>(
+      positions.template data_ptr<double>(),
+      positions.size(0), 3
+  );
+  auto momenta_kk = UnmanagedView<double**, DeviceType>(
+      momenta.template data_ptr<double>(),
+      momenta.size(0), 3
+  );
 
-  // Copy current x and v to host
-  Kokkos::deep_copy(x_host, x);
-  Kokkos::deep_copy(v_host, v);
-
-  // Update positions and velocities on host
-  for (int i = 0; i < nlocal; i++) {
-      if (mask_host[i] & groupbit) {
-          // Update positions with ML predictions
-          x_host(i, 0) = positions[i][0].item<double>();
-          x_host(i, 1) = positions[i][1].item<double>();
-          x_host(i, 2) = positions[i][2].item<double>();
-
-          // Update velocities from predicted momenta: v = p / m
-          double mass_i;
-          if (rmass.data()) {
-              mass_i = masses_host[i];
-          } else {
-              auto type_host = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), type);
-              auto mass_host = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), mass);
-              mass_i = mass_host[type_host[i]];
+  // Get Kokkos views for LAMMPS data
+  auto x_view = x;
+  auto v_view = v;
+  auto mask_view = mask;
+  auto type_view = type;
+  auto rmass_view = rmass;
+  auto mass_view = mass;
+  
+  // Prepare masses view for device access
+  // Copy masses to device if needed
+  typename AT::t_kkfloat_1d masses_kk;
+  if (rmass.data()) {
+      masses_kk = rmass_view;
+  } else {
+      // Create a per-atom mass array from type-based masses
+      masses_kk = typename AT::t_kkfloat_1d("fix_metatomic:masses", nall);
+      Kokkos::parallel_for(
+          nall,
+          KOKKOS_LAMBDA(int i) {
+              masses_kk[i] = mass_view[type_view[i]];
           }
-          v_host(i, 0) = momenta[i][0].item<double>() / mass_i;
-          v_host(i, 1) = momenta[i][1].item<double>() / mass_i;
-          v_host(i, 2) = momenta[i][2].item<double>() / mass_i;
-      }
+      );
   }
 
-  // Copy updated positions and velocities back to device
-  Kokkos::deep_copy(x, x_host);
-  Kokkos::deep_copy(v, v_host);
+  // Apply ML predictions to LAMMPS atoms using Kokkos parallel operations on device
+  int groupbit_copy = groupbit;
+  Kokkos::parallel_for(
+      nlocal,
+      KOKKOS_LAMBDA(int i) {
+          if (mask_view[i] & groupbit_copy) {
+              // Update positions with ML predictions
+              x_view(i, 0) = positions_kk(i, 0);
+              x_view(i, 1) = positions_kk(i, 1);
+              x_view(i, 2) = positions_kk(i, 2);
+
+              // Update velocities from predicted momenta: v = p / m
+              double mass_i = masses_kk[i];
+              v_view(i, 0) = momenta_kk(i, 0) / mass_i;
+              v_view(i, 1) = momenta_kk(i, 1) / mass_i;
+              v_view(i, 2) = momenta_kk(i, 2) / mass_i;
+          }
+      }
+  );
 
   // Mark that we've modified positions and velocities
   atomKK->modified(execution_space, datamask_modify);
