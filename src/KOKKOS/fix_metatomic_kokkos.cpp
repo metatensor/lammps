@@ -143,19 +143,31 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/)
 {
   // This function performs ML-driven position and momentum updates using Kokkos
   
-  // Sync atom data for reading
-  atomKK->sync(execution_space, datamask_read);
-  // Immediately mark that we will modify X and V to prevent any subsequent syncs from overwriting
-  atomKK->modified(execution_space, datamask_modify);
-  
-  // Get Kokkos views for atom data
-  x = atomKK->k_x.view<DeviceType>();
-  v = atomKK->k_v.view<DeviceType>();
-  f = atomKK->k_f.view<DeviceType>();
-  rmass = atomKK->k_rmass.view<DeviceType>();
-  mass = atomKK->k_mass.view<DeviceType>();
-  type = atomKK->k_type.view<DeviceType>();
-  mask = atomKK->k_mask.view<DeviceType>();
+  atomKK->sync(execution_space,datamask_read);
+  atomKK->modified(execution_space,datamask_modify);
+
+  auto x = atomKK->k_x.view<DeviceType>();
+  auto v = atomKK->k_v.view<DeviceType>();
+  auto f = atomKK->k_f.view<DeviceType>();
+  auto rmass = atomKK->k_rmass.view<DeviceType>();
+  auto mass = atomKK->k_mass.view<DeviceType>();
+  auto type = atomKK->k_type.view<DeviceType>();
+  auto mask = atomKK->k_mask.view<DeviceType>();
+
+  // print the first few entries of v for debugging
+  Kokkos::parallel_for(
+      1,
+      KOKKOS_LAMBDA(int i) {
+        printf("Beginning of initial integrate: v[%d] = (%f, %f, %f)\n",
+                i,
+                v(i, 0),
+                v(i, 1),
+                v(i, 2));
+      }
+  );
+  Kokkos::fence();
+
+  std::cout << "In initial_integrate of fix_metatomic/kk" << std::endl;
 
   int nlocal = atomKK->nlocal;
   int nghost = atomKK->nghost;
@@ -196,12 +208,10 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/)
       auto masses_kk = UnmanagedView<double*, DeviceType>(
           masses.data_ptr<double>(), nall
       );
-      auto type_kk = type;
-      auto mass_kk = mass;
       Kokkos::parallel_for(
           nall,
           KOKKOS_LAMBDA(int i) {
-              masses_kk[i] = mass_kk[type_kk[i]];
+              masses_kk[i] = mass[type[i]];
           }
       );
   }
@@ -231,6 +241,16 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/)
 
   // Add momenta to the system
   {
+    Kokkos::parallel_for(
+    1,
+    KOKKOS_LAMBDA(const int& i) {
+    printf("Just before tensor creation: %f %f %f\n",
+            v(i,0),
+            v(i,1),
+            v(i,2));
+    });
+    Kokkos::fence();
+
     // Gather velocities from Kokkos view - create tensor directly from device pointer
     auto velocities = torch::from_blob(
         v.data(), {nall, 3},
@@ -325,53 +345,74 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/)
       momenta.template data_ptr<double>(),
       momenta.size(0), 3
   );
-
-  // Get Kokkos views for LAMMPS data
-  auto x_view = x;
-  auto v_view = v;
-  auto mask_view = mask;
-  auto type_view = type;
-  auto rmass_view = rmass;
-  auto mass_view = mass;
   
   // Prepare masses view for device access
   // Copy masses to device if needed
   typename AT::t_kkfloat_1d masses_kk;
   if (rmass.data()) {
-      masses_kk = rmass_view;
+      masses_kk = rmass;
   } else {
       // Create a per-atom mass array from type-based masses
       masses_kk = typename AT::t_kkfloat_1d("fix_metatomic:masses", nall);
       Kokkos::parallel_for(
           nall,
           KOKKOS_LAMBDA(int i) {
-              masses_kk[i] = mass_view[type_view[i]];
+              masses_kk[i] = mass[type[i]];
           }
       );
   }
+
+  // debug print
+    // Kokkos::parallel_for(
+    //     std::min(nlocal, 1),
+    //     KOKKOS_LAMBDA(int i) {
+    //         printf("Debug initial_integrate before ML update: x[%d] = (%f, %f, %f), v[%d] = (%f, %f, %f)\n",
+    //                 i,
+    //                 x(i, 0),
+    //                 x(i, 1),
+    //                 x(i, 2),
+    //                 i,
+    //                 v(i, 0),
+    //                 v(i, 1),
+    //                 v(i, 2));
+    //     }
+    // );
 
   // Apply ML predictions to LAMMPS atoms using Kokkos parallel operations on device
   int groupbit_copy = groupbit;
   Kokkos::parallel_for(
       nlocal,
       KOKKOS_LAMBDA(int i) {
-          if (mask_view[i] & groupbit_copy) {
+          if (mask[i] & groupbit_copy) {
               // Update positions with ML predictions
-              x_view(i, 0) = positions_kk(i, 0);
-              x_view(i, 1) = positions_kk(i, 1);
-              x_view(i, 2) = positions_kk(i, 2);
+              x(i, 0) = positions_kk(i, 0);
+              x(i, 1) = positions_kk(i, 1);
+              x(i, 2) = positions_kk(i, 2);
 
               // Update velocities from predicted momenta: v = p / m
               double mass_i = masses_kk[i];
-              v_view(i, 0) = momenta_kk(i, 0) / mass_i;
-              v_view(i, 1) = momenta_kk(i, 1) / mass_i;
-              v_view(i, 2) = momenta_kk(i, 2) / mass_i;
+              v(i, 0) = momenta_kk(i, 0) / mass_i;
+              v(i, 1) = momenta_kk(i, 1) / mass_i;
+              v(i, 2) = momenta_kk(i, 2) / mass_i;
           }
       }
   );
-  
-  // Ensure all Kokkos operations complete
-  Kokkos::fence();
+
+    // debug print
+        // Kokkos::parallel_for(
+        //     std::min(nlocal, 1),
+        //     KOKKOS_LAMBDA(int i) {
+        //         printf("Debug initial_integrate after ML update: x[%d] = (%f, %f, %f), v[%d] = (%f, %f, %f)\n",
+        //                 i,
+        //                 x(i, 0),
+        //                 x(i, 1),
+        //                 x(i, 2),
+        //                 i,
+        //                 v(i, 0),
+        //                 v(i, 1),
+        //                 v(i, 2));
+        //     }
+        // );
 }
 
 /* ---------------------------------------------------------------------- */
@@ -381,10 +422,9 @@ void FixMetatomicKokkos<DeviceType>::post_force(int /*vflag*/)
 {
   // Take a snapshot of forces for Langevin compatibility
   // See fix_metatomic.cpp for detailed explanation
-  
   atomKK->sync(execution_space, F_MASK);
   
-  auto f_current = atomKK->k_f.view<DeviceType>();
+  auto f = atomKK->k_f.template view<DeviceType>();
   int nlocal = atomKK->nlocal;
   if (igroup == atomKK->firstgroup) nlocal = atomKK->nfirst;
 
@@ -395,8 +435,8 @@ void FixMetatomicKokkos<DeviceType>::post_force(int /*vflag*/)
 
   // Copy current forces to snapshot using Kokkos parallel operations
   auto f_pre_sub = Kokkos::subview(f_pre_kk, std::make_pair(0, nlocal), Kokkos::ALL);
-  auto f_current_sub = Kokkos::subview(f_current, std::make_pair(0, nlocal), Kokkos::ALL);
-  Kokkos::deep_copy(f_pre_sub, f_current_sub);
+  auto f_sub = Kokkos::subview(f, std::make_pair(0, nlocal), Kokkos::ALL);
+  Kokkos::deep_copy(f_pre_sub, f_sub);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -406,45 +446,71 @@ void FixMetatomicKokkos<DeviceType>::final_integrate()
 {
   // Apply velocity corrections from forces added after post_force
   // This handles stochastic forces from Langevin thermostats
-  
   atomKK->sync(execution_space, V_MASK | F_MASK | MASK_MASK | RMASS_MASK | TYPE_MASK);
+  atomKK->modified(execution_space, V_MASK);
   
-  auto v_current = atomKK->k_v.view<DeviceType>();
-  auto f_current = atomKK->k_f.view<DeviceType>();
-  auto rmass_view = atomKK->k_rmass.view<DeviceType>();
-  auto mass_view = atomKK->k_mass.view<DeviceType>();
-  auto type_view = atomKK->k_type.view<DeviceType>();
-  auto mask_view = atomKK->k_mask.view<DeviceType>();
+  auto v = atomKK->k_v.template view<DeviceType>();
+  auto f = atomKK->k_f.template view<DeviceType>();
+  auto rmass = atomKK->k_rmass.template view<DeviceType>();
+  auto mass = atomKK->k_mass.template view<DeviceType>();
+  auto type = atomKK->k_type.template view<DeviceType>();
+  auto mask = atomKK->k_mask.template view<DeviceType>();
+
+  auto f_pre_kk = this->f_pre_kk;
+  auto groupbit = this->groupbit;
   
   int nlocal = atomKK->nlocal;
   if (igroup == atomKK->firstgroup) nlocal = atomKK->nfirst;
 
   double dtf = update->dt * force->ftm2v;
-  int groupbit_copy = groupbit;
-  auto f_pre_copy = f_pre_kk;
-  bool use_rmass = rmass_view.data() != nullptr;
+  bool use_rmass = rmass.data() != nullptr;
+
+  // print the first few entries of v for debugging
+//   Kokkos::parallel_for(
+//       std::min(nlocal, 1),
+//       KOKKOS_LAMBDA(int i) {
+//         printf("Debug final_integrate before correction: v[%d] = (%f, %f, %f)\n",
+//                 i,
+//                 v(i, 0),
+//                 v(i, 1),
+//                 v(i, 2));
+//       }
+//   );
 
   // Apply force corrections using Kokkos parallel operation
   Kokkos::parallel_for(
       nlocal,
       KOKKOS_LAMBDA(int i) {
-          if (mask_view[i] & groupbit_copy) {
-              double mass_i = use_rmass ? rmass_view[i] : mass_view[type_view[i]];
+          if (mask[i] & groupbit) {
+              double mass_i = use_rmass ? rmass[i] : mass[type[i]];
               double dtfm = dtf / mass_i;
               
               // Apply only the incremental force (f - f_pre) to velocities
-              v_current(i, 0) += (f_current(i, 0) - f_pre_copy(i, 0)) * dtfm;
-              v_current(i, 1) += (f_current(i, 1) - f_pre_copy(i, 1)) * dtfm;
-              v_current(i, 2) += (f_current(i, 2) - f_pre_copy(i, 2)) * dtfm;
+              v(i, 0) += (f(i, 0) - f_pre_kk(i, 0)) * dtfm;
+              v(i, 1) += (f(i, 1) - f_pre_kk(i, 1)) * dtfm;
+              v(i, 2) += (f(i, 2) - f_pre_kk(i, 2)) * dtfm;
           }
       }
   );
-  
-  // Ensure all Kokkos operations complete before marking as modified
-  Kokkos::fence();
-  
-  // Mark that we've modified velocities in execution space
-  atomKK->modified(execution_space, V_MASK);
+
+//   auto v = atomKK->k_v.template view<DeviceType>();
+
+  // Print the first few entries of v for debugging
+    // Kokkos::parallel_for(
+    //     std::min(nlocal, 1),
+    //     KOKKOS_LAMBDA(int i) {
+    //         printf("Debug final_integrate after correction: v[%d] = (%f, %f, %f)\n",
+    //                 i,
+    //                 v(i, 0),
+    //                 v(i, 1),
+    //                 v(i, 2));
+    //     }
+    // );
+
+    // atomKK->modified(execution_space, ALL_MASK);
+
+    // atomKK->sync(execution_space, ALL_MASK);
+    // atomKK->modified(execution_space, ALL_MASK);
 }
 
 /* ---------------------------------------------------------------------- */
