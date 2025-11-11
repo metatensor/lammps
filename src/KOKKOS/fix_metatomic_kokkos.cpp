@@ -406,7 +406,6 @@ void FixMetatomicKokkos<DeviceType>::final_integrate()
   // This handles stochastic forces from Langevin thermostats
   
   atomKK->sync(execution_space, V_MASK | F_MASK | MASK_MASK | RMASS_MASK | TYPE_MASK);
-  atomKK->modified(execution_space, V_MASK);
   
   auto v_current = atomKK->k_v.view<DeviceType>();
   auto f_current = atomKK->k_f.view<DeviceType>();
@@ -438,6 +437,9 @@ void FixMetatomicKokkos<DeviceType>::final_integrate()
           }
       }
   );
+  
+  // Mark that we've modified velocities in execution space
+  atomKK->modified(execution_space, V_MASK);
 }
 
 /* ---------------------------------------------------------------------- */
