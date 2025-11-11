@@ -367,6 +367,9 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/)
           }
       }
   );
+  
+  // Ensure all Kokkos operations complete before marking as modified
+  Kokkos::fence();
 
   // Mark that we've modified positions and velocities in execution space
   atomKK->modified(execution_space, datamask_modify);
@@ -437,6 +440,9 @@ void FixMetatomicKokkos<DeviceType>::final_integrate()
           }
       }
   );
+  
+  // Ensure all Kokkos operations complete before marking as modified
+  Kokkos::fence();
   
   // Mark that we've modified velocities in execution space
   atomKK->modified(execution_space, V_MASK);
