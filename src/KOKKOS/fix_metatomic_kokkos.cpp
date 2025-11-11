@@ -181,28 +181,29 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/)
       mta_data->device
   );
 
-  // Gather masses in a tensor and ship to device
-  auto float_tensor_options = torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU);
+  // Gather masses in a tensor - create directly on device
+  auto float_tensor_options = torch::TensorOptions().dtype(torch::kFloat64).device(mta_data->device);
   torch::Tensor masses;
   if (rmass.data()) {
-      // Per-atom masses: copy from Kokkos view to CPU tensor
-      auto rmass_mirror = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), rmass);
+      // Per-atom masses: create tensor directly from device pointer
       masses = torch::from_blob(
-          rmass_mirror.data(), {nall},
+          rmass.data(), {nall},
           float_tensor_options.requires_grad(false)
-      ).clone().to(mta_data->device);
+      ).clone();
   } else {
-      // Type-based masses: map from atom type to mass
-      std::vector<double> masses_vector(nall);
-      auto type_mirror = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), type);
-      auto mass_mirror = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), mass);
-      for (int i = 0; i < nall; i++) {
-          masses_vector[i] = mass_mirror[type_mirror[i]];
-      }
-      masses = torch::from_blob(
-          masses_vector.data(), {nall},
-          float_tensor_options.requires_grad(false)
-      ).clone().to(mta_data->device);
+      // Type-based masses: map from atom type to mass on device
+      masses = torch::empty({nall}, float_tensor_options);
+      auto masses_kk = UnmanagedView<double*, DeviceType>(
+          masses.data_ptr<double>(), nall
+      );
+      auto type_kk = type;
+      auto mass_kk = mass;
+      Kokkos::parallel_for(
+          nall,
+          KOKKOS_LAMBDA(int i) {
+              masses_kk[i] = mass_kk[type_kk[i]];
+          }
+      );
   }
   
   auto label_tensor_options = torch::TensorOptions().dtype(torch::kInt32).device(mta_data->device);
@@ -230,12 +231,11 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/)
 
   // Add momenta to the system
   {
-    // Gather velocities from Kokkos view
-    auto v_mirror = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), v);
+    // Gather velocities from Kokkos view - create tensor directly from device pointer
     auto velocities = torch::from_blob(
-        v_mirror.data(), {nall, 3},
+        v.data(), {nall, 3},
         float_tensor_options.requires_grad(false)
-    ).clone().to(mta_data->device);
+    ).clone();
 
     // Compute momenta = mass * velocity with unit conversion
     // Unit conversion factor for metal units (see fix_metatomic.cpp for details)
