@@ -143,8 +143,10 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/)
 {
   // This function performs ML-driven position and momentum updates using Kokkos
   
-  // Sync atom data for reading (but don't call modified() yet - we need to read velocities first)
+  // Sync atom data for reading
   atomKK->sync(execution_space, datamask_read);
+  // Immediately mark that we will modify X and V to prevent any subsequent syncs from overwriting
+  atomKK->modified(execution_space, datamask_modify);
   
   // Get Kokkos views for atom data
   x = atomKK->k_x.view<DeviceType>();
@@ -368,11 +370,8 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/)
       }
   );
   
-  // Ensure all Kokkos operations complete before marking as modified
+  // Ensure all Kokkos operations complete
   Kokkos::fence();
-
-  // Mark that we've modified positions and velocities in execution space
-  atomKK->modified(execution_space, datamask_modify);
 }
 
 /* ---------------------------------------------------------------------- */
