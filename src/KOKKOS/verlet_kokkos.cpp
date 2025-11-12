@@ -352,6 +352,16 @@ void VerletKokkos::run(int n)
       //atomKK->sync(Host,ALL_MASK);
       //atomKK->modified(Host,ALL_MASK);
 
+    Kokkos::parallel_for(
+      1,
+      KOKKOS_LAMBDA(const int& i) {
+        printf("1: %f %f %f\n",
+               v(i,0),
+               v(i,1),
+               v(i,2));
+      });
+    Kokkos::fence();
+
       if (n_pre_exchange) {
         timer->stamp();
         modify->pre_exchange();
@@ -377,6 +387,16 @@ void VerletKokkos::run(int n)
       if (sortflag && ntimestep >= atomKK->nextsort) atomKK->sort();
       comm->borders();
 
+    Kokkos::parallel_for(
+      1,
+      KOKKOS_LAMBDA(const int& i) {
+        printf("2: %f %f %f\n",
+               v(i,0),
+               v(i,1),
+               v(i,2));
+      });
+    Kokkos::fence();
+
       // added debug
       //atomKK->sync(Host,ALL_MASK);
       //atomKK->modified(Host,ALL_MASK);
@@ -396,6 +416,16 @@ void VerletKokkos::run(int n)
       }
     }
 
+    Kokkos::parallel_for(
+      1,
+      KOKKOS_LAMBDA(const int& i) {
+        printf("3: %f %f %f\n",
+               v(i,0),
+               v(i,1),
+               v(i,2));
+      });
+    Kokkos::fence();
+
     // check if kernels can be fused, must come after initial_integrate
 
     fuse_check(i,n);
@@ -414,6 +444,16 @@ void VerletKokkos::run(int n)
       modify->pre_force(vflag);
       timer->stamp(Timer::MODIFY);
     }
+
+    Kokkos::parallel_for(
+      1,
+      KOKKOS_LAMBDA(const int& i) {
+        printf("4: %f %f %f\n",
+               v(i,0),
+               v(i,1),
+               v(i,2));
+      });
+    Kokkos::fence();
 
     bool execute_on_host = false;
     unsigned int datamask_read_host = 0;
@@ -467,6 +507,16 @@ void VerletKokkos::run(int n)
       }
     }
 
+    Kokkos::parallel_for(
+      1,
+      KOKKOS_LAMBDA(const int& i) {
+        printf("5: %f %f %f\n",
+               v(i,0),
+               v(i,1),
+               v(i,2));
+      });
+    Kokkos::fence();
+
     if (pair_compute_flag) {
       atomKK->sync(force->pair->execution_space,force->pair->datamask_read);
       atomKK->sync(force->pair->execution_space,~(~force->pair->datamask_read|datamask_exclude));
@@ -486,6 +536,16 @@ void VerletKokkos::run(int n)
         atomKK->k_f.modify_hostkk_legacy();
       }
     }
+
+    Kokkos::parallel_for(
+      1,
+      KOKKOS_LAMBDA(const int& i) {
+        printf("6: %f %f %f\n",
+               v(i,0),
+               v(i,1),
+               v(i,2));
+      });
+    Kokkos::fence();
 
     if (atomKK->molecular) {
       if (force->bond) {
@@ -535,6 +595,16 @@ void VerletKokkos::run(int n)
       timer->stamp(Timer::MODIFY);
     }
 
+    Kokkos::parallel_for(
+      1,
+      KOKKOS_LAMBDA(const int& i) {
+        printf("7: %f %f %f\n",
+               v(i,0),
+               v(i,1),
+               v(i,2));
+      });
+    Kokkos::fence();
+
     // reverse communication of forces
 
     if (force->newton) {
@@ -543,11 +613,30 @@ void VerletKokkos::run(int n)
       timer->stamp(Timer::COMM);
     }
 
+    Kokkos::parallel_for(
+      1,
+      KOKKOS_LAMBDA(const int& i) {
+        printf("8: %f %f %f\n",
+               v(i,0),
+               v(i,1),
+               v(i,2));
+      });
+    Kokkos::fence();
+
     // force modifications, final time integration, diagnostics
 
     if (n_post_force) modify->post_force(vflag);
 
-    // print positions
+    Kokkos::parallel_for(
+      1,
+      KOKKOS_LAMBDA(const int& i) {
+        printf("9: %f %f %f\n",
+               v(i,0),
+               v(i,1),
+               v(i,2));
+      });
+    Kokkos::fence();
+
     Kokkos::parallel_for(
       1,
       KOKKOS_LAMBDA(const int& i) {

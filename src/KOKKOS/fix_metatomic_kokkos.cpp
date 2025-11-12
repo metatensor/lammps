@@ -142,9 +142,6 @@ template<class DeviceType>
 void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/)
 {
   // This function performs ML-driven position and momentum updates using Kokkos
-  
-  atomKK->sync(execution_space,datamask_read);
-  atomKK->modified(execution_space,datamask_modify);
 
   auto x = atomKK->k_x.view<DeviceType>();
   auto v = atomKK->k_v.view<DeviceType>();
@@ -153,6 +150,9 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/)
   auto mass = atomKK->k_mass.view<DeviceType>();
   auto type = atomKK->k_type.view<DeviceType>();
   auto mask = atomKK->k_mask.view<DeviceType>();
+
+  atomKK->modified(execution_space,datamask_modify);
+  atomKK->sync(execution_space,datamask_read);
 
   // print the first few entries of v for debugging
   Kokkos::parallel_for(
@@ -420,11 +420,39 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/)
 template<class DeviceType>
 void FixMetatomicKokkos<DeviceType>::post_force(int /*vflag*/)
 {
+//   auto v = atomKK->k_v.template view<DeviceType>();
+
+//   Kokkos::parallel_for(
+//       1,
+//       KOKKOS_LAMBDA(const int& i) {
+//         printf("Beginning of post force: v[%d] = (%f, %f, %f)\n",
+//                 i,
+//                 v(i,0),
+//                 v(i,1),
+//                 v(i,2));
+//       }
+//   );
+//   Kokkos::fence();
+
   // Take a snapshot of forces for Langevin compatibility
   // See fix_metatomic.cpp for detailed explanation
-  atomKK->sync(execution_space, F_MASK);
+
+//   Kokkos::parallel_for(
+//       1,
+//       KOKKOS_LAMBDA(const int& i) {
+//         printf("After sync: v[%d] = (%f, %f, %f)\n",
+//                 i,
+//                 v(i,0),
+//                 v(i,1),
+//                 v(i,2));
+//       }
+//   );
+//   Kokkos::fence();
   
   auto f = atomKK->k_f.template view<DeviceType>();
+
+  atomKK->sync(execution_space, F_MASK);
+
   int nlocal = atomKK->nlocal;
   if (igroup == atomKK->firstgroup) nlocal = atomKK->nfirst;
 
@@ -437,6 +465,18 @@ void FixMetatomicKokkos<DeviceType>::post_force(int /*vflag*/)
   auto f_pre_sub = Kokkos::subview(f_pre_kk, std::make_pair(0, nlocal), Kokkos::ALL);
   auto f_sub = Kokkos::subview(f, std::make_pair(0, nlocal), Kokkos::ALL);
   Kokkos::deep_copy(f_pre_sub, f_sub);
+
+//   Kokkos::parallel_for(
+//       1,
+//       KOKKOS_LAMBDA(const int& i) {
+//         printf("End of post force: v[%d] = (%f, %f, %f)\n",
+//                 i,
+//                 v(i,0),
+//                 v(i,1),
+//                 v(i,2));
+//       }
+//   );
+//   Kokkos::fence();
 }
 
 /* ---------------------------------------------------------------------- */
@@ -446,8 +486,6 @@ void FixMetatomicKokkos<DeviceType>::final_integrate()
 {
   // Apply velocity corrections from forces added after post_force
   // This handles stochastic forces from Langevin thermostats
-  atomKK->sync(execution_space, V_MASK | F_MASK | MASK_MASK | RMASS_MASK | TYPE_MASK);
-  atomKK->modified(execution_space, V_MASK);
   
   auto v = atomKK->k_v.template view<DeviceType>();
   auto f = atomKK->k_f.template view<DeviceType>();
@@ -455,6 +493,23 @@ void FixMetatomicKokkos<DeviceType>::final_integrate()
   auto mass = atomKK->k_mass.template view<DeviceType>();
   auto type = atomKK->k_type.template view<DeviceType>();
   auto mask = atomKK->k_mask.template view<DeviceType>();
+
+
+std::cout << execution_space << std::endl; //
+
+//   atomKK->sync(execution_space, V_MASK | F_MASK | MASK_MASK | RMASS_MASK | TYPE_MASK);
+
+  Kokkos::parallel_for(
+      1,
+      KOKKOS_LAMBDA(const int& i) {
+        printf("Beginning of final_integrate: v[%d] = (%f, %f, %f)\n",
+                i,
+                v(i,0),
+                v(i,1),
+                v(i,2));
+      }
+  );
+  Kokkos::fence();
 
   auto f_pre_kk = this->f_pre_kk;
   auto groupbit = this->groupbit;
@@ -484,14 +539,29 @@ void FixMetatomicKokkos<DeviceType>::final_integrate()
           if (mask[i] & groupbit) {
               double mass_i = use_rmass ? rmass[i] : mass[type[i]];
               double dtfm = dtf / mass_i;
+
+              if (i == 0)
+                    printf("Velocities before correction: v[%d] = (%f, %f, %f)\n",
+                           i,
+                           v(i, 0),
+                           v(i, 1),
+                           v(i, 2));
               
               // Apply only the incremental force (f - f_pre) to velocities
               v(i, 0) += (f(i, 0) - f_pre_kk(i, 0)) * dtfm;
               v(i, 1) += (f(i, 1) - f_pre_kk(i, 1)) * dtfm;
               v(i, 2) += (f(i, 2) - f_pre_kk(i, 2)) * dtfm;
+
+                if (i == 0)
+                        printf("Velocities after correction: v[%d] = (%f, %f, %f)\n",
+                             i,
+                             v(i, 0),
+                             v(i, 1),
+                             v(i, 2));
           }
       }
   );
+  Kokkos::fence();
 
 //   auto v = atomKK->k_v.template view<DeviceType>();
 
@@ -511,6 +581,8 @@ void FixMetatomicKokkos<DeviceType>::final_integrate()
 
     // atomKK->sync(execution_space, ALL_MASK);
     // atomKK->modified(execution_space, ALL_MASK);
+
+    atomKK->modified(execution_space, V_MASK);
 }
 
 /* ---------------------------------------------------------------------- */
