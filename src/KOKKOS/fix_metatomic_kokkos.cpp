@@ -151,23 +151,23 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/)
   auto type = atomKK->k_type.view<DeviceType>();
   auto mask = atomKK->k_mask.view<DeviceType>();
 
-  atomKK->modified(execution_space,datamask_modify);
   atomKK->sync(execution_space,datamask_read);
+  atomKK->modified(execution_space,datamask_modify);
 
   // print the first few entries of v for debugging
-  Kokkos::parallel_for(
-      1,
-      KOKKOS_LAMBDA(int i) {
-        printf("Beginning of initial integrate: v[%d] = (%f, %f, %f)\n",
-                i,
-                v(i, 0),
-                v(i, 1),
-                v(i, 2));
-      }
-  );
-  Kokkos::fence();
+  // Kokkos::parallel_for(
+  //     1,
+  //     KOKKOS_LAMBDA(int i) {
+  //       printf("Beginning of initial integrate: v[%d] = (%f, %f, %f)\n",
+  //               i,
+  //               v(i, 0),
+  //               v(i, 1),
+  //               v(i, 2));
+  //     }
+  // );
+  // Kokkos::fence();
 
-  std::cout << "In initial_integrate of fix_metatomic/kk" << std::endl;
+  // std::cout << "In initial_integrate of fix_metatomic/kk" << std::endl;
 
   int nlocal = atomKK->nlocal;
   int nghost = atomKK->nghost;
@@ -241,15 +241,15 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/)
 
   // Add momenta to the system
   {
-    Kokkos::parallel_for(
-    1,
-    KOKKOS_LAMBDA(const int& i) {
-    printf("Just before tensor creation: %f %f %f\n",
-            v(i,0),
-            v(i,1),
-            v(i,2));
-    });
-    Kokkos::fence();
+    // Kokkos::parallel_for(
+    // 1,
+    // KOKKOS_LAMBDA(const int& i) {
+    // printf("Just before tensor creation: %f %f %f\n",
+    //         v(i,0),
+    //         v(i,1),
+    //         v(i,2));
+    // });
+    // Kokkos::fence();
 
     // Gather velocities from Kokkos view - create tensor directly from device pointer
     auto velocities = torch::from_blob(
@@ -495,21 +495,22 @@ void FixMetatomicKokkos<DeviceType>::final_integrate()
   auto mask = atomKK->k_mask.template view<DeviceType>();
 
 
-std::cout << execution_space << std::endl; //
+// std::cout << execution_space << std::endl; //
 
-//   atomKK->sync(execution_space, V_MASK | F_MASK | MASK_MASK | RMASS_MASK | TYPE_MASK);
+  atomKK->sync(execution_space, V_MASK | F_MASK | MASK_MASK | RMASS_MASK | TYPE_MASK);
+  atomKK->modified(execution_space, V_MASK);
 
-  Kokkos::parallel_for(
-      1,
-      KOKKOS_LAMBDA(const int& i) {
-        printf("Beginning of final_integrate: v[%d] = (%f, %f, %f)\n",
-                i,
-                v(i,0),
-                v(i,1),
-                v(i,2));
-      }
-  );
-  Kokkos::fence();
+  // Kokkos::parallel_for(
+  //     1,
+  //     KOKKOS_LAMBDA(const int& i) {
+  //       printf("Beginning of final_integrate: v[%d] = (%f, %f, %f)\n",
+  //               i,
+  //               v(i,0),
+  //               v(i,1),
+  //               v(i,2));
+  //     }
+  // );
+  // Kokkos::fence();
 
   auto f_pre_kk = this->f_pre_kk;
   auto groupbit = this->groupbit;
@@ -540,24 +541,24 @@ std::cout << execution_space << std::endl; //
               double mass_i = use_rmass ? rmass[i] : mass[type[i]];
               double dtfm = dtf / mass_i;
 
-              if (i == 0)
-                    printf("Velocities before correction: v[%d] = (%f, %f, %f)\n",
-                           i,
-                           v(i, 0),
-                           v(i, 1),
-                           v(i, 2));
+              // if (i == 0)
+              //       printf("Velocities before correction: v[%d] = (%f, %f, %f)\n",
+              //              i,
+              //              v(i, 0),
+              //              v(i, 1),
+              //              v(i, 2));
               
               // Apply only the incremental force (f - f_pre) to velocities
               v(i, 0) += (f(i, 0) - f_pre_kk(i, 0)) * dtfm;
               v(i, 1) += (f(i, 1) - f_pre_kk(i, 1)) * dtfm;
               v(i, 2) += (f(i, 2) - f_pre_kk(i, 2)) * dtfm;
 
-                if (i == 0)
-                        printf("Velocities after correction: v[%d] = (%f, %f, %f)\n",
-                             i,
-                             v(i, 0),
-                             v(i, 1),
-                             v(i, 2));
+                // if (i == 0)
+                //         printf("Velocities after correction: v[%d] = (%f, %f, %f)\n",
+                //              i,
+                //              v(i, 0),
+                //              v(i, 1),
+                //              v(i, 2));
           }
       }
   );
@@ -581,8 +582,6 @@ std::cout << execution_space << std::endl; //
 
     // atomKK->sync(execution_space, ALL_MASK);
     // atomKK->modified(execution_space, ALL_MASK);
-
-    atomKK->modified(execution_space, V_MASK);
 }
 
 /* ---------------------------------------------------------------------- */

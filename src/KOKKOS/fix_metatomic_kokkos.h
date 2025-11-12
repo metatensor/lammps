@@ -58,10 +58,6 @@ class FixMetatomicKokkos : public FixMetatomic {
 
   // Kokkos view for type mapping
   Kokkos::View<int32_t*, Kokkos::LayoutRight, DeviceType> type_mapping_kk;
-
-  AtomKokkos *atomKK;
-  ExecutionSpace execution_space;
-  int datamask_read, datamask_modify;
 };
 
 }    // namespace LAMMPS_NS

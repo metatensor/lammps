@@ -291,16 +291,16 @@ void VerletKokkos::run(int n)
   timer->init_timeout();
   for (int i = 0; i < n; i++) {
 
-    Kokkos::parallel_for(
-      1,
-      KOKKOS_LAMBDA(const int& i) {
-        printf("Beginning of step: %f %f %f\n",
-               v(i,0),
-               v(i,1),
-               v(i,2));
-      }
-    );
-    Kokkos::fence();
+    // Kokkos::parallel_for(
+    //   1,
+    //   KOKKOS_LAMBDA(const int& i) {
+    //     printf("Beginning of step: %f %f %f\n",
+    //            v(i,0),
+    //            v(i,1),
+    //            v(i,2));
+    //   }
+    // );
+    // Kokkos::fence();
 
 
     if (timer->check_timeout(i)) {
@@ -313,15 +313,15 @@ void VerletKokkos::run(int n)
 
     // initial time integration
 
-    Kokkos::parallel_for(
-      1,
-      KOKKOS_LAMBDA(const int& i) {
-        printf("Before initial integrate: %f %f %f\n",
-               v(i,0),
-               v(i,1),
-               v(i,2));
-      });
-    Kokkos::fence();
+    // Kokkos::parallel_for(
+    //   1,
+    //   KOKKOS_LAMBDA(const int& i) {
+    //     printf("Before initial integrate: %f %f %f\n",
+    //            v(i,0),
+    //            v(i,1),
+    //            v(i,2));
+    //   });
+    // Kokkos::fence();
 
     timer->stamp();
     if (!fuse_integrate)
@@ -329,15 +329,15 @@ void VerletKokkos::run(int n)
     if (n_post_integrate) modify->post_integrate();
     timer->stamp(Timer::MODIFY);
 
-    Kokkos::parallel_for(
-      1,
-      KOKKOS_LAMBDA(const int& i) {
-        printf("After initial integrate: %f %f %f\n",
-               v(i,0),
-               v(i,1),
-               v(i,2));
-      });
-    Kokkos::fence();
+    // Kokkos::parallel_for(
+    //   1,
+    //   KOKKOS_LAMBDA(const int& i) {
+    //     printf("After initial integrate: %f %f %f\n",
+    //            v(i,0),
+    //            v(i,1),
+    //            v(i,2));
+    //   });
+    // Kokkos::fence();
 
     // regular communication vs neighbor list rebuild
 
@@ -352,15 +352,15 @@ void VerletKokkos::run(int n)
       //atomKK->sync(Host,ALL_MASK);
       //atomKK->modified(Host,ALL_MASK);
 
-    Kokkos::parallel_for(
-      1,
-      KOKKOS_LAMBDA(const int& i) {
-        printf("1: %f %f %f\n",
-               v(i,0),
-               v(i,1),
-               v(i,2));
-      });
-    Kokkos::fence();
+    // Kokkos::parallel_for(
+    //   1,
+    //   KOKKOS_LAMBDA(const int& i) {
+    //     printf("1: %f %f %f\n",
+    //            v(i,0),
+    //            v(i,1),
+    //            v(i,2));
+    //   });
+    // Kokkos::fence();
 
       if (n_pre_exchange) {
         timer->stamp();
@@ -387,15 +387,15 @@ void VerletKokkos::run(int n)
       if (sortflag && ntimestep >= atomKK->nextsort) atomKK->sort();
       comm->borders();
 
-    Kokkos::parallel_for(
-      1,
-      KOKKOS_LAMBDA(const int& i) {
-        printf("2: %f %f %f\n",
-               v(i,0),
-               v(i,1),
-               v(i,2));
-      });
-    Kokkos::fence();
+    // Kokkos::parallel_for(
+    //   1,
+    //   KOKKOS_LAMBDA(const int& i) {
+    //     printf("2: %f %f %f\n",
+    //            v(i,0),
+    //            v(i,1),
+    //            v(i,2));
+    //   });
+    // Kokkos::fence();
 
       // added debug
       //atomKK->sync(Host,ALL_MASK);
@@ -416,15 +416,15 @@ void VerletKokkos::run(int n)
       }
     }
 
-    Kokkos::parallel_for(
-      1,
-      KOKKOS_LAMBDA(const int& i) {
-        printf("3: %f %f %f\n",
-               v(i,0),
-               v(i,1),
-               v(i,2));
-      });
-    Kokkos::fence();
+    // Kokkos::parallel_for(
+    //   1,
+    //   KOKKOS_LAMBDA(const int& i) {
+    //     printf("3: %f %f %f\n",
+    //            v(i,0),
+    //            v(i,1),
+    //            v(i,2));
+    //   });
+    // Kokkos::fence();
 
     // check if kernels can be fused, must come after initial_integrate
 
@@ -445,15 +445,15 @@ void VerletKokkos::run(int n)
       timer->stamp(Timer::MODIFY);
     }
 
-    Kokkos::parallel_for(
-      1,
-      KOKKOS_LAMBDA(const int& i) {
-        printf("4: %f %f %f\n",
-               v(i,0),
-               v(i,1),
-               v(i,2));
-      });
-    Kokkos::fence();
+    // Kokkos::parallel_for(
+    //   1,
+    //   KOKKOS_LAMBDA(const int& i) {
+    //     printf("4: %f %f %f\n",
+    //            v(i,0),
+    //            v(i,1),
+    //            v(i,2));
+    //   });
+    // Kokkos::fence();
 
     bool execute_on_host = false;
     unsigned int datamask_read_host = 0;
@@ -507,15 +507,15 @@ void VerletKokkos::run(int n)
       }
     }
 
-    Kokkos::parallel_for(
-      1,
-      KOKKOS_LAMBDA(const int& i) {
-        printf("5: %f %f %f\n",
-               v(i,0),
-               v(i,1),
-               v(i,2));
-      });
-    Kokkos::fence();
+    // Kokkos::parallel_for(
+    //   1,
+    //   KOKKOS_LAMBDA(const int& i) {
+    //     printf("5: %f %f %f\n",
+    //            v(i,0),
+    //            v(i,1),
+    //            v(i,2));
+    //   });
+    // Kokkos::fence();
 
     if (pair_compute_flag) {
       atomKK->sync(force->pair->execution_space,force->pair->datamask_read);
@@ -537,15 +537,15 @@ void VerletKokkos::run(int n)
       }
     }
 
-    Kokkos::parallel_for(
-      1,
-      KOKKOS_LAMBDA(const int& i) {
-        printf("6: %f %f %f\n",
-               v(i,0),
-               v(i,1),
-               v(i,2));
-      });
-    Kokkos::fence();
+    // Kokkos::parallel_for(
+    //   1,
+    //   KOKKOS_LAMBDA(const int& i) {
+    //     printf("6: %f %f %f\n",
+    //            v(i,0),
+    //            v(i,1),
+    //            v(i,2));
+    //   });
+    // Kokkos::fence();
 
     if (atomKK->molecular) {
       if (force->bond) {
@@ -595,15 +595,15 @@ void VerletKokkos::run(int n)
       timer->stamp(Timer::MODIFY);
     }
 
-    Kokkos::parallel_for(
-      1,
-      KOKKOS_LAMBDA(const int& i) {
-        printf("7: %f %f %f\n",
-               v(i,0),
-               v(i,1),
-               v(i,2));
-      });
-    Kokkos::fence();
+    // Kokkos::parallel_for(
+    //   1,
+    //   KOKKOS_LAMBDA(const int& i) {
+    //     printf("7: %f %f %f\n",
+    //            v(i,0),
+    //            v(i,1),
+    //            v(i,2));
+    //   });
+    // Kokkos::fence();
 
     // reverse communication of forces
 
@@ -613,95 +613,95 @@ void VerletKokkos::run(int n)
       timer->stamp(Timer::COMM);
     }
 
-    Kokkos::parallel_for(
-      1,
-      KOKKOS_LAMBDA(const int& i) {
-        printf("8: %f %f %f\n",
-               v(i,0),
-               v(i,1),
-               v(i,2));
-      });
-    Kokkos::fence();
+    // Kokkos::parallel_for(
+    //   1,
+    //   KOKKOS_LAMBDA(const int& i) {
+    //     printf("8: %f %f %f\n",
+    //            v(i,0),
+    //            v(i,1),
+    //            v(i,2));
+    //   });
+    // Kokkos::fence();
 
     // force modifications, final time integration, diagnostics
 
     if (n_post_force) modify->post_force(vflag);
 
-    Kokkos::parallel_for(
-      1,
-      KOKKOS_LAMBDA(const int& i) {
-        printf("9: %f %f %f\n",
-               v(i,0),
-               v(i,1),
-               v(i,2));
-      });
-    Kokkos::fence();
+    // Kokkos::parallel_for(
+    //   1,
+    //   KOKKOS_LAMBDA(const int& i) {
+    //     printf("9: %f %f %f\n",
+    //            v(i,0),
+    //            v(i,1),
+    //            v(i,2));
+    //   });
+    // Kokkos::fence();
 
-    Kokkos::parallel_for(
-      1,
-      KOKKOS_LAMBDA(const int& i) {
-        printf("Before final integrate: %f %f %f\n",
-               v(i,0),
-               v(i,1),
-               v(i,2));
-      });
-    Kokkos::fence();
+    // Kokkos::parallel_for(
+    //   1,
+    //   KOKKOS_LAMBDA(const int& i) {
+    //     printf("Before final integrate: %f %f %f\n",
+    //            v(i,0),
+    //            v(i,1),
+    //            v(i,2));
+    //   });
+    // Kokkos::fence();
 
     if (fuse_integrate) modify->fused_integrate(vflag);
     else modify->final_integrate();
 
-    Kokkos::parallel_for(
-      1,
-      KOKKOS_LAMBDA(const int& i) {
-        printf("After final integrate: %f %f %f\n",
-               v(i,0),
-               v(i,1),
-               v(i,2));
-      });
-    Kokkos::fence();
+    // Kokkos::parallel_for(
+    //   1,
+    //   KOKKOS_LAMBDA(const int& i) {
+    //     printf("After final integrate: %f %f %f\n",
+    //            v(i,0),
+    //            v(i,1),
+    //            v(i,2));
+    //   });
+    // Kokkos::fence();
 
     if (n_end_of_step) modify->end_of_step();
     timer->stamp(Timer::MODIFY);
 
-    Kokkos::parallel_for(
-      1,
-      KOKKOS_LAMBDA(const int& i) {
-        printf("End of step: %f %f %f\n",
-               v(i,0),
-               v(i,1),
-               v(i,2));
-      });
-    Kokkos::fence();
+    // Kokkos::parallel_for(
+    //   1,
+    //   KOKKOS_LAMBDA(const int& i) {
+    //     printf("End of step: %f %f %f\n",
+    //            v(i,0),
+    //            v(i,1),
+    //            v(i,2));
+    //   });
+    // Kokkos::fence();
 
     // all output
 
     if (ntimestep == output->next) {
        atomKK->sync(Host,ALL_MASK);
 
-      Kokkos::parallel_for(
-      1,
-      KOKKOS_LAMBDA(const int& i) {
-        printf("After host sync: %f %f %f\n",
-              v(i,0),
-              v(i,1),
-              v(i,2));
-      });
-      Kokkos::fence();
+      // Kokkos::parallel_for(
+      // 1,
+      // KOKKOS_LAMBDA(const int& i) {
+      //   printf("After host sync: %f %f %f\n",
+      //         v(i,0),
+      //         v(i,1),
+      //         v(i,2));
+      // });
+      // Kokkos::fence();
 
       timer->stamp();
       output->write(ntimestep);
       timer->stamp(Timer::OUTPUT);
     }
 
-    Kokkos::parallel_for(
-    1,
-    KOKKOS_LAMBDA(const int& i) {
-      printf("After output: %f %f %f\n",
-            v(i,0),
-            v(i,1),
-            v(i,2));
-    });
-    Kokkos::fence();
+    // Kokkos::parallel_for(
+    // 1,
+    // KOKKOS_LAMBDA(const int& i) {
+    //   printf("After output: %f %f %f\n",
+    //         v(i,0),
+    //         v(i,1),
+    //         v(i,2));
+    // });
+    // Kokkos::fence();
 
   }
 
