@@ -718,7 +718,7 @@ void PairMetatomic::compute(int eflag, int vflag) {
 
             error->warning(FLERR,
                 "The uncertainty on atomic energies for {} are larger than "
-                "the threshold of {}. Be careful when analyzing the results, "
+                "the threshold of {} eV/atom. Be careful when analyzing the results, "
                 "and consider retraining the model to better describe these "
                 "configurations.",
                 atoms_message.str(), mta_data->uncertainty_threshold
