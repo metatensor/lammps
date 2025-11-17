@@ -399,7 +399,7 @@ void PairMetatomic::settings(int argc, char ** argv) {
 void PairMetatomic::pick_device(torch::Device& device, const char* requested) {
 
     torch::optional<std::string> requested_string;
-    std::string device_string;
+    torch::DeviceType device_type;
 
     if (requested != nullptr) {
         requested_string = std::string(requested);
@@ -408,7 +408,7 @@ void PairMetatomic::pick_device(torch::Device& device, const char* requested) {
     }
 
     try {
-        device_string = metatomic_torch::pick_device(
+        device_type = metatomic_torch::pick_device(
             this->mta_data->capabilities->supported_devices,
             requested_string
         );
@@ -416,7 +416,7 @@ void PairMetatomic::pick_device(torch::Device& device, const char* requested) {
         error->one(FLERR, "pair_style metatomic: {}", e.what());
     }
 
-    if (device_string == "cuda") {
+    if (device_type == torch::DeviceType::CUDA) {
         // distribute GPUs between multiple MPI processes on the same node
 
         // (1) get a MPI communicator for all processes on the current node
@@ -438,10 +438,10 @@ void PairMetatomic::pick_device(torch::Device& device, const char* requested) {
         }
 
         // (3) split GPUs between node-local processes using round-robin allocation
-        int gpu_to_use = local_rank % torch::cuda::device_count();
-        device = torch::Device("cuda:" + std::to_string(gpu_to_use));
+        auto device_index = local_rank % torch::cuda::device_count();
+        device = torch::Device(device_type, static_cast<torch::DeviceIndex>(device_index));
     } else {
-        device = torch::Device(device_string);
+        device = torch::Device(device_type);
     }
 }
 
