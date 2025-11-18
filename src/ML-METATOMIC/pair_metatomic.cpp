@@ -251,8 +251,7 @@ void PairMetatomic::settings(int argc, char ** argv) {
 
     // Handle energy variant
     try {
-        mta_data->energy_key =
-            pick_output("energy", outputs, v_energy);
+        mta_data->energy_key = pick_output("energy", outputs, v_energy);
     } catch (std::exception& e) {
         error->one(FLERR, e.what());
     }
@@ -260,8 +259,7 @@ void PairMetatomic::settings(int argc, char ** argv) {
     // Handle energy_uncertainty variant
     if (do_uncertainty) {
         try {
-            mta_data->energy_uq_key =
-                pick_output("energy_uncertainty", outputs, v_energy_uq);
+            mta_data->energy_uq_key = pick_output("energy_uncertainty", outputs, v_energy_uq);
         } catch (std::exception& e) {
             error->one(FLERR, e.what());
         }
@@ -287,12 +285,8 @@ void PairMetatomic::settings(int argc, char ** argv) {
         }
 
         try {
-            mta_data->nc_forces_key =
-                pick_output("non_conservative_forces", outputs, v_nc_forces);
-
-            mta_data->nc_stress_key =
-                pick_output("non_conservative_stress", outputs, v_nc_stress);
-
+            mta_data->nc_forces_key = pick_output("non_conservative_forces", outputs, v_nc_forces);
+            mta_data->nc_stress_key = pick_output("non_conservative_stress", outputs, v_nc_stress);
         } catch (std::exception& e) {
             error->one(FLERR, e.what());
         }
