@@ -580,6 +580,69 @@ void PairMetatomic::init_list(int id, NeighList *ptr) {
     this->mta_list = ptr;
 }
 
+metatomic_torch::System _match_ghost_to_real(metatomic_torch::System system, torch::intrusive_ptr<metatensor_torch::LabelsHolder> selected_atoms) {
+    auto _ = MetatomicTimer("matching ghost atoms to real atoms in System");
+    auto device = system->positions().device();
+    auto dtype = system->positions().scalar_type();
+
+    auto neighbor_list = system->get_neighbor_list(system->known_neighbor_lists()[0]);
+    auto nl_values = neighbor_list->samples()->values();
+
+    auto centers_values = nl_values.index({torch::indexing::Slice(), 0});
+    auto neighbors_values = nl_values.index({torch::indexing::Slice(), 1});
+
+    // The system index (first column) in selected_atoms should always be 0 here
+    auto system_selected_atoms = selected_atoms->values().index({
+        torch::indexing::Slice(),
+        1
+    });
+
+    auto unique_centers = std::get<0>(at::_unique(centers_values));
+    system_selected_atoms = std::get<0>(at::_unique(torch::cat({system_selected_atoms, unique_centers}, 0)));
+
+    // calculate the mapping from the ghost atoms to the real atoms
+    int64_t max_center_index;
+    if (unique_centers.numel() == 0) {
+        max_center_index = -1;
+    } else {
+        max_center_index = unique_centers.max().item<int64_t>();
+    }
+    auto ghost_to_real_index = torch::full(
+        {max_center_index + 1},
+        -1,
+        torch::TensorOptions().device(device).dtype(dtype)
+    );
+    for (int64_t j = 0; j < unique_centers.size(0); j++) {
+        auto unique_center_index = unique_centers[j];
+        ghost_to_real_index.index_put_({unique_center_index}, system_selected_atoms[j]);
+    }
+    centers_values = ghost_to_real_index.index({centers_values});
+    neighbors_values = ghost_to_real_index.index({neighbors_values});
+
+    auto new_system = torch::make_intrusive<metatomic_torch::SystemHolder>(
+        system->types().index({system_selected_atoms}),
+        system->positions().index({system_selected_atoms}),
+        system->cell(),
+        system->pbc()
+    );
+    auto new_neighbor_list = torch::make_intrusive<metatensor_torch::TensorBlockHolder>(
+        neighbor_list->values(),  // .detach(),
+        torch::make_intrusive<metatensor_torch::LabelsHolder>(  
+            neighbor_list->samples()->names(),
+            torch::cat({centers_values.unsqueeze(1), neighbors_values.unsqueeze(1), nl_values.index({torch::indexing::Slice(), torch::indexing::Slice(2, torch::indexing::None)})}, 1).to(torch::kInt32),
+            metatensor::assume_unique{}
+        ),
+        neighbor_list->components(),
+        neighbor_list->properties()
+    );
+
+    // std::cout << "Registering autograd neighbors" << std::endl;
+    // metatomic_torch::register_autograd_neighbors(new_system, new_neighbor_list, true);
+    // std::cout << "Registered autograd neighbors" << std::endl;
+    new_system->add_neighbor_list(system->known_neighbor_lists()[0], new_neighbor_list);
+    return new_system;
+}
+
 void PairMetatomic::compute(int eflag, int vflag) {
     if (std::getenv("LAMMPS_METATOMIC_PROFILE") != nullptr) {
         MetatomicTimer::enable(true);
@@ -662,6 +725,9 @@ void PairMetatomic::compute(int eflag, int vflag) {
         mta_data->selected_atoms_values,
         metatensor::assume_unique{}
     );
+
+    system = _match_ghost_to_real(system, selected_atoms);
+
     mta_data->evaluation_options->set_selected_atoms(selected_atoms);
 
     torch::IValue results_ivalue;
