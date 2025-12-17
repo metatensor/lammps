@@ -78,6 +78,35 @@ struct PairMetatomicData {
    std::string nc_stress_key;
 };
 
+struct FixMetatomicData {
+   FixMetatomicData(std::string length_unit);
+
+   void load_model(LAMMPS* lmp, const char* path, const char* extensions_directory);
+
+   // the metatomic model
+   std::unique_ptr<metatensor_torch::Module> model;
+   // the path used to load the model
+   std::string model_path;
+   // device to use for the calculations
+   torch::Device device;
+   // model capabilities, declared by the model
+   metatomic_torch::ModelCapabilities capabilities;
+   // run-time evaluation options, decided by this class
+   metatomic_torch::ModelEvaluationOptions evaluation_options;
+
+   // should metatomic check the data LAMMPS send to the model
+   // and the data the model returns?
+   bool check_consistency;
+   // whether pairs should be remapped, removing pairs between ghosts if there
+   // is an equivalent pair involving at least one local atom.
+   bool remap_pairs;
+   // how far away the model needs to know about neighbors
+   double max_cutoff;
+
+   // allocation cache for the selected atoms
+   torch::Tensor selected_atoms_values;
+};
+
 }    // namespace LAMMPS_NS
 
 #endif

@@ -86,3 +86,68 @@ void PairMetatomicData::load_model(
        }
    }
 }
+
+FixMetatomicData::FixMetatomicData(std::string length_unit):
+    device(torch::kCPU),
+    check_consistency(false),
+    remap_pairs(true),
+    max_cutoff(-1)
+{
+    auto options = torch::TensorOptions().dtype(torch::kInt32);
+    this->selected_atoms_values = torch::zeros({0, 2}, options);
+
+    // Initialize evaluation_options
+    this->evaluation_options = torch::make_intrusive<metatomic_torch::ModelEvaluationOptionsHolder>();
+    this->evaluation_options->set_length_unit(std::move(length_unit));
+}
+
+void FixMetatomicData::load_model(
+   LAMMPS* lmp,
+   const char* path,
+   const char* extensions_directory
+) {
+   // TODO: seach for the model & extensions inside `$LAMMPS_POTENTIALS`?
+
+   this->model_path = path;
+   if (this->model != nullptr) {
+       lmp->error->one(FLERR, "torch model is already loaded");
+   }
+
+   torch::optional<std::string> extensions = torch::nullopt;
+   if (extensions_directory != nullptr) {
+       extensions = std::string(extensions_directory);
+   }
+
+   try {
+       this->model = std::make_unique<metatensor_torch::Module>(
+           metatomic_torch::load_atomistic_model(this->model_path, extensions)
+       );
+   } catch (const c10::Error& e) {
+       lmp->error->one(FLERR, "failed to load metatomic model at '{}': {}", path, e.what());
+   }
+
+   auto capabilities_ivalue = this->model->run_method("capabilities");
+   this->capabilities = capabilities_ivalue.toCustomClass<metatomic_torch::ModelCapabilitiesHolder>();
+
+   if (lmp->comm->me == 0) {
+       auto metadata_ivalue = this->model->run_method("metadata");
+       auto metadata = metadata_ivalue.toCustomClass<metatomic_torch::ModelMetadataHolder>();
+       auto to_print = metadata->print();
+
+       if (lmp->screen) {
+           fprintf(lmp->screen, "\n%s\n", to_print.c_str());
+       }
+       if (lmp->logfile) {
+           fprintf(lmp->logfile,"\n%s\n", to_print.c_str());
+       }
+
+       // add the model references to LAMMPS citation handling mechanism
+       if (lmp->citeme) {
+          for (const auto& it: metadata->references) {
+             for (const auto& ref: it.value()) {
+                lmp->citeme->add(ref + "\n");
+             }
+          }
+       }
+   }
+}
