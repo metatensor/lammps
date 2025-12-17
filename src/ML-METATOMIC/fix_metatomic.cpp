@@ -15,16 +15,8 @@
 /* ----------------------------------------------------------------------
    Fix metatomic: ML-driven position and momentum prediction
 
-   This fix implements machine learning-driven molecular dynamics where a 
+   This fix implements machine learning-driven molecular dynamics where a
    trained model predicts atomic positions and momenta at each timestep.
-   The model takes current positions, velocities (as momenta), and masses
-   as input and outputs updated positions and momenta.
-
-   Key features:
-   - Compatible with Langevin thermostats (fix langevin, fix press/langevin)
-   - Isolates stochastic forces from ML predictions via force snapshots
-   - Currently supports only 'metal' units
-   - Requires single MPI process (multi-process support in development)
 
    The integration scheme:
    1. initial_integrate: ML model predicts new positions and momenta
@@ -218,7 +210,7 @@ void FixMetatomic::init()
 
   // Select the device to use based on the model's preference, the user choice
   // and what's available.
-  this->pick_device(&mta_data->device, this->requested_device.c_str());
+  this->pick_device(mta_data->device, this->requested_device.c_str());
 
   // move all data to the correct device
   mta_data->model->to(mta_data->device);
@@ -283,72 +275,26 @@ void FixMetatomic::init()
   }
 }
 
-std::vector<torch::DeviceType> FixMetatomic::available_devices() {
-    auto devices = std::vector<torch::DeviceType>();
-    for (const auto& supported: this->mta_data->capabilities->supported_devices) {
-        if (supported == "cpu") {
-            devices.push_back(torch::kCPU);
-        } else if (supported == "cuda" && torch::cuda::is_available()) {
-            devices.push_back(torch::kCUDA);
-        } else if (supported == "mps") {
-            #if TORCH_VERSION_MAJOR >= 2
-            if (torch::mps::is_available()) {
-                devices.push_back(torch::kMPS);
-            }
-            #endif
-        } else {
-            error->warning(FLERR,
-                "the model declared support for unknown device '{}', it will be ignored", supported
-            );
-        }
-    }
+void FixMetatomic::pick_device(c10::Device& device, const char* requested) {
+    torch::optional<std::string> requested_string;
+    torch::DeviceType device_type;
 
-    if (devices.empty()) {
-        error->all(FLERR,
-            "failed to find a valid device for this model: "
-            "the model supports {}, none of these where available",
-            torch::str(this->mta_data->capabilities->supported_devices)
-        );
-    }
-
-    return devices;
-}
-
-void FixMetatomic::pick_device(torch::Device* device, const char* requested) {
-    auto available_devices = this->available_devices();
-
-    auto picked_device_type = torch::kCPU;
-    if (requested == nullptr) {
-        // no user request, pick the device the model prefers
-        picked_device_type = available_devices[0];
+    if (requested != nullptr) {
+        requested_string = std::string(requested);
     } else {
-        bool found_requested_device = false;
-        for (const auto& device_type: available_devices) {
-            if (device_type == torch::kCPU && strcmp(requested, "cpu") == 0) {
-                picked_device_type = device_type;
-                found_requested_device = true;
-                break;
-            } else if (device_type == torch::kCUDA && strcmp(requested, "cuda") == 0) {
-                picked_device_type = device_type;
-                found_requested_device = true;
-                break;
-            } else if (device_type == torch::kMPS && strcmp(requested, "mps") == 0) {
-                picked_device_type = device_type;
-                found_requested_device = true;
-                break;
-            }
-        }
-
-        if (!found_requested_device) {
-            error->all(FLERR,
-                "failed to find requested device ({}): it is either "
-                "not supported by this model or not available on this machine",
-                requested
-            );
-        }
+        requested_string = torch::nullopt;
     }
 
-    if (picked_device_type == torch::kCUDA) {
+    try {
+        device_type = metatomic_torch::pick_device(
+            this->mta_data->capabilities->supported_devices,
+            requested_string
+        );
+    } catch (const c10::Error& e) {
+        error->one(FLERR, "fix metatomic: {}", e.what());
+    }
+
+    if (device_type == torch::DeviceType::CUDA) {
         // distribute GPUs between multiple MPI processes on the same node
 
         // (1) get a MPI communicator for all processes on the current node
@@ -370,10 +316,10 @@ void FixMetatomic::pick_device(torch::Device* device, const char* requested) {
         }
 
         // (3) split GPUs between node-local processes using round-robin allocation
-        int gpu_to_use = local_rank % torch::cuda::device_count();
-        *device = torch::Device(picked_device_type, gpu_to_use);
+        auto device_index = local_rank % torch::cuda::device_count();
+        device = torch::Device(device_type, static_cast<torch::DeviceIndex>(device_index));
     } else {
-        *device = torch::Device(picked_device_type);
+        device = torch::Device(device_type);
     }
 }
 
@@ -385,7 +331,7 @@ void FixMetatomic::initial_integrate(int /*vflag*/)
 {
   // This function performs ML-driven position and momentum updates
   // It uses a trained model to predict new positions and momenta at each timestep
-  
+
   double **x = atom->x;
   double **v = atom->v;
   double *rmass = atom->rmass;
@@ -393,11 +339,13 @@ void FixMetatomic::initial_integrate(int /*vflag*/)
   int nlocal = atom->nlocal;
   int nghost = atom->nghost;
   int nall = nlocal + nghost;
-  
+
   double *mass = atom->mass;
   int *type = atom->type;
   int *mask = atom->mask;
-  if (igroup == atom->firstgroup) nlocal = atom->nfirst;
+  if (igroup == atom->firstgroup) {
+    nlocal = atom->nfirst;
+  }
 
   auto dtype = torch::kFloat64;
   if (mta_data->capabilities->dtype() == "float64") {
@@ -412,7 +360,6 @@ void FixMetatomic::initial_integrate(int /*vflag*/)
   auto system = this->system_adaptor->system_from_lmp(
       mta_list,
       static_cast<bool>(vflag_global),
-      mta_data->remap_pairs,
       dtype,
       mta_data->device
   );
@@ -436,7 +383,7 @@ void FixMetatomic::initial_integrate(int /*vflag*/)
           float_tensor_options.requires_grad(false)
       ).to(mta_data->device);
   }
-  
+
   auto label_tensor_options = torch::TensorOptions().dtype(torch::kInt32).device(mta_data->device);
   // add masses to system
   {
@@ -637,14 +584,16 @@ void FixMetatomic::post_force(int /*vflag*/)
   // Crucially, this means that fix metatomic needs to be the first fix in the
   // post_force() sequence, i.e., the user must have it before any other fix that adds
   // forces in the input script.
-  
+
   this->ensure_capacity();
 
   double **f = atom->f;
   int *mask = atom->mask;
 
   int nlocal = atom->nlocal;
-  if (igroup == atom->firstgroup) nlocal = atom->nfirst;
+  if (igroup == atom->firstgroup) {
+    nlocal = atom->nfirst;
+  }
 
   for (int i = 0; i < nlocal; i++) {
     if (mask[i] & groupbit) {
@@ -665,7 +614,7 @@ void FixMetatomic::final_integrate()
   // - final_integrate: we apply only the force difference as a velocity correction
   // This ensures Langevin forces properly affect the dynamics while allowing
   // the ML model to handle the deterministic evolution
-  
+
   double dtf = update->dt * force->ftm2v;
 
   double **v = atom->v;

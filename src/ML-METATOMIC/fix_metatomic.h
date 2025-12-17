@@ -13,16 +13,23 @@
 
 #ifdef FIX_CLASS
 // clang-format off
-FixStyle(metatomic,FixMetatomic);
+FixStyle(metatomic, FixMetatomic);
 // clang-format on
 #else
 
-#ifndef LMP_FIX_FLASHMD_H
-#define LMP_FIX_FLASHMD_H
+#ifndef LMP_FIX_METATOMIC_H
+#define LMP_FIX_METATOMIC_H
 
 #include "fix.h"
 
-#include <metatomic/torch.hpp>
+namespace c10 {
+    class Device;
+    enum class DeviceType: int8_t;
+}
+
+namespace at {
+    class Tensor;
+}
 
 namespace LAMMPS_NS {
 class MetatomicSystemAdaptor;
@@ -35,7 +42,7 @@ class FixMetatomic : public Fix {
 
   int setmask() override;
   void init() override;
-  
+
   // Integration methods for ML-driven dynamics
   void initial_integrate(int) override;  // ML prediction of positions/momenta
   void post_force(int) override;         // Snapshot forces for Langevin compatibility
@@ -43,15 +50,14 @@ class FixMetatomic : public Fix {
   void init_list(int id, NeighList *ptr) override;
 
  protected:
-  std::vector<torch::DeviceType> available_devices();
-  void pick_device(torch::Device* device, const char* requested);
+  virtual void pick_device(c10::Device& device, const char* requested);
 
   double momentum_conversion_factor;  // Conversion factor for momenta
   double dt;                    // Timestep
   std::string model_path;       // Path to ML model file
   std::string extensions_directory; // Directory for model extensions
   std::string requested_device; // Device to run model on (cpu/cuda/mps)
-   
+
   // Metatomic model data and configuration
   FixMetatomicData* mta_data;
   NeighList *mta_list;
@@ -65,7 +71,7 @@ class FixMetatomic : public Fix {
 
   // Mapping from LAMMPS atom types to metatomic model types
   int32_t *type_mapping;
-  
+
   // Helper class to convert between LAMMPS and metatomic representations
   std::unique_ptr<MetatomicSystemAdaptor> system_adaptor;
 };

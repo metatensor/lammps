@@ -13,7 +13,7 @@
 
 #ifdef FIX_CLASS
 // clang-format off
-FixStyle(metatomic/kk,FixMetatomicKokkos<LMPDeviceType>);
+FixStyle(metatomic/kk, FixMetatomicKokkos<LMPDeviceType>);
 // clang-format on
 #else
 
@@ -42,7 +42,7 @@ class FixMetatomicKokkos : public FixMetatomic {
   void final_integrate() override;
 
  private:
-  void pick_device(torch::Device* device, const char* requested);
+  void pick_device(c10::Device& device, const char* requested) override;
 
   // Kokkos view for type mapping
   Kokkos::View<int32_t*, Kokkos::LayoutRight, DeviceType> type_mapping_kk;

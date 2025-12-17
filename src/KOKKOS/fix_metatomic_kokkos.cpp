@@ -117,20 +117,20 @@ void FixMetatomicKokkos<DeviceType>::init()
 /* ---------------------------------------------------------------------- */
 
 template<class DeviceType>
-void FixMetatomicKokkos<DeviceType>::pick_device(torch::Device* device, const char* requested)
+void FixMetatomicKokkos<DeviceType>::pick_device(c10::Device& device, const char* requested)
 {
   // Pick device based on Kokkos execution space
-  *device = KokkosDeviceToTorch<DeviceType>::convert();
+  device = KokkosDeviceToTorch<DeviceType>::convert();
 
   if (requested != nullptr) {
       auto requested_str = std::string(requested);
       std::transform(requested_str.begin(), requested_str.end(), requested_str.begin(), ::tolower);
-      if (c10::DeviceTypeName(device->type(), /*lower_case=*/true) != requested_str) {
+      if (c10::DeviceTypeName(device.type(), /*lower_case=*/true) != requested_str) {
           error->all(FLERR,
               "requested device '{}' does not match the device being used by kokkos '{}', "
               "use the non-kokkos version of this fix to use a different "
               "device for the model and LAMMPS",
-              requested, device->str()
+              requested, device.str()
           );
       }
   }
@@ -143,7 +143,7 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/)
 {
   // ML-driven position and momentum updates using Kokkos
   // This is the main integration step where the ML model predicts new positions and momenta
-  
+
   // Get views to atom data on device
   auto x = atomKK->k_x.view<DeviceType>();
   auto v = atomKK->k_v.view<DeviceType>();
@@ -179,7 +179,6 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/)
   auto system = this->system_adaptor->system_from_lmp(
       mta_list,
       static_cast<bool>(vflag_global),
-      mta_data->remap_pairs,
       dtype,
       mta_data->device
   );
@@ -206,9 +205,9 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/)
           }
       );
   }
-  
+
   auto label_tensor_options = torch::TensorOptions().dtype(torch::kInt32).device(mta_data->device);
-  
+
   // Add masses to system
   {
     metatensor_torch::Labels keys = metatensor_torch::LabelsHolder::single()->to(mta_data->device);
@@ -328,7 +327,7 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/)
       momenta.template data_ptr<double>(),
       momenta.size(0), 3
   );
-  
+
   // Prepare masses view for device access
   // Copy masses to device if needed
   typename AT::t_kkfloat_1d masses_kk;
@@ -501,7 +500,7 @@ void FixMetatomicKokkos<DeviceType>::post_force(int /*vflag*/)
   // Crucially, this means that fix metatomic needs to be the first fix in the
   // post_force() sequence, i.e., the user must have it before any other fix that adds
   // forces in the input script.
-  
+
   auto f = atomKK->k_f.template view<DeviceType>();
   atomKK->sync(execution_space, F_MASK);
 
@@ -525,7 +524,7 @@ void FixMetatomicKokkos<DeviceType>::final_integrate()
   // Apply velocity corrections from forces added after post_force
   // This handles stochastic forces from Langevin thermostats by applying only
   // the incremental force (f_current - f_snapshot) to velocities
-  
+
   auto v = atomKK->k_v.template view<DeviceType>();
   auto f = atomKK->k_f.template view<DeviceType>();
   auto rmass = atomKK->k_rmass.template view<DeviceType>();
@@ -539,7 +538,7 @@ void FixMetatomicKokkos<DeviceType>::final_integrate()
 
   auto f_pre_kk = this->f_pre_kk;
   auto groupbit = this->groupbit;
-  
+
   int nlocal = atomKK->nlocal;
   if (igroup == atomKK->firstgroup) nlocal = atomKK->nfirst;
 
@@ -554,7 +553,7 @@ void FixMetatomicKokkos<DeviceType>::final_integrate()
           if (mask[i] & groupbit) {
               double mass_i = use_rmass ? rmass[i] : mass[type[i]];
               double dtfm = dtf / mass_i;
-              
+
               // Apply only the incremental force (f - f_pre) to velocities
               v(i, 0) += (f(i, 0) - f_pre_kk(i, 0)) * dtfm;
               v(i, 1) += (f(i, 1) - f_pre_kk(i, 1)) * dtfm;
