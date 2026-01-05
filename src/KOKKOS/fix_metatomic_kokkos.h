@@ -30,25 +30,25 @@ class MetatomicSystemAdaptorKokkos;
 
 template<class DeviceType>
 class FixMetatomicKokkos : public FixMetatomic {
- public:
-  typedef ArrayTypes<DeviceType> AT;
+public:
+   typedef ArrayTypes<DeviceType> AT;
 
-  FixMetatomicKokkos(class LAMMPS *, int, char **);
-  ~FixMetatomicKokkos();
+   FixMetatomicKokkos(class LAMMPS *, int, char **);
+   ~FixMetatomicKokkos();
 
-  void init() override;
-  void initial_integrate(int) override;
-  void post_force(int) override;
-  void final_integrate() override;
+   void init() override;
+   void initial_integrate(int) override;
+   void post_force(int) override;
+   void final_integrate() override;
 
- private:
-  void pick_device(c10::Device& device, const char* requested) override;
+private:
+   void pick_device(c10::Device& device, const char* requested) override;
 
-  // Kokkos view for type mapping
-  Kokkos::View<int32_t*, Kokkos::LayoutRight, DeviceType> type_mapping_kk;
+   // Kokkos view for type mapping
+   Kokkos::View<int32_t*, Kokkos::LayoutRight, DeviceType> type_mapping_kk;
 
-  // Kokkos view for force snapshot
-  typename AT::t_kkfloat_2d f_pre_kk;
+   // Kokkos view for force snapshot
+   typename AT::t_kkfloat_2d f_pre_kk;
 };
 
 }    // namespace LAMMPS_NS

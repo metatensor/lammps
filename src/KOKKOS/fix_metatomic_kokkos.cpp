@@ -41,8 +41,8 @@ using namespace FixConst;
 
 // LAMMPS uses `LAMMPS_NS::tagint` and `int` for tags and neighbor lists, respectively.
 // For the moment, we require both to be int32_t for this interface
-static_assert(std::is_same_v<LAMMPS_NS::tagint, int32_t>, "Error: LAMMPS_NS::tagint must be int32_t to compile metatomic/kk");
-static_assert(std::is_same_v<int, int32_t>, "Error: int must be int32_t to compile metatomic/kk");
+static_assert(std::is_same_v<LAMMPS_NS::tagint, int32_t>, "Error: LAMMPS_NS::tagint must be int32_t to compile fix metatomic/kk");
+static_assert(std::is_same_v<int, int32_t>, "Error: int must be int32_t to compile fix metatomic/kk");
 
 template<typename T, class DeviceType>
 using UnmanagedView = Kokkos::View<T, Kokkos::LayoutRight, DeviceType, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
@@ -50,9 +50,7 @@ using UnmanagedView = Kokkos::View<T, Kokkos::LayoutRight, DeviceType, Kokkos::M
 /* ---------------------------------------------------------------------- */
 
 template<class DeviceType>
-FixMetatomicKokkos<DeviceType>::FixMetatomicKokkos(LAMMPS *lmp, int narg, char **arg) :
-  FixMetatomic(lmp, narg, arg)
-{
+FixMetatomicKokkos<DeviceType>::FixMetatomicKokkos(LAMMPS *lmp, int narg, char **arg): FixMetatomic(lmp, narg, arg) {
   kokkosable = 1;
   atomKK = (AtomKokkos *) atom;
   execution_space = ExecutionSpaceFromDevice<DeviceType>::space;
@@ -69,280 +67,268 @@ FixMetatomicKokkos<DeviceType>::~FixMetatomicKokkos() {}
 /* ---------------------------------------------------------------------- */
 
 template<class DeviceType>
-void FixMetatomicKokkos<DeviceType>::init()
-{
-  FixMetatomic::init();
+void FixMetatomicKokkos<DeviceType>::init() {
+    FixMetatomic::init();
 
-  auto request = neighbor->find_request(this);
-  request->set_kokkos_host(
-    std::is_same_v<DeviceType, LMPHostType> &&
-    !std::is_same_v<DeviceType, LMPDeviceType>
-  );
-  request->set_kokkos_device(std::is_same_v<DeviceType, LMPDeviceType>);
+    auto request = neighbor->find_request(this);
+    request->set_kokkos_host(
+        std::is_same_v<DeviceType, LMPHostType> &&
+        !std::is_same_v<DeviceType, LMPDeviceType>
+    );
+    request->set_kokkos_device(std::is_same_v<DeviceType, LMPDeviceType>);
 
-  // copy type mapping from host to device, to be able to give a device pointer
-  // to MetatomicSystemAdaptorKokkos
-  auto type_mapping_kk_host = UnmanagedView<int32_t*, LMPHostType>(this->type_mapping, atom->ntypes + 1);
-  this->type_mapping_kk = Kokkos::View<int32_t*, Kokkos::LayoutRight, DeviceType>("type_mapping_kk", atom->ntypes + 1);
-  Kokkos::deep_copy(this->type_mapping_kk, type_mapping_kk_host);
+    // copy type mapping from host to device, to be able to give a device pointer
+    // to MetatomicSystemAdaptorKokkos
+    auto type_mapping_kk_host = UnmanagedView<int32_t*, LMPHostType>(this->type_mapping, atom->ntypes + 1);
+    this->type_mapping_kk = Kokkos::View<int32_t*, Kokkos::LayoutRight, DeviceType>("type_mapping_kk", atom->ntypes + 1);
+    Kokkos::deep_copy(this->type_mapping_kk, type_mapping_kk_host);
 
-  auto options = MetatomicSystemOptions{
-    this->type_mapping_kk.data(),
-    mta_data->max_cutoff,
-    mta_data->check_consistency,
-    /* requires_grad */ false,
-  };
+    auto options = MetatomicSystemOptions{
+        this->type_mapping_kk.data(),
+        mta_data->max_cutoff,
+        mta_data->check_consistency,
+        /* requires_grad */ false,
+    };
 
-  // override the system adaptor with the kokkos version
-  this->system_adaptor = std::make_unique<MetatomicSystemAdaptorKokkos<DeviceType>>(lmp, options);
+    // override the system adaptor with the kokkos version
+    this->system_adaptor = std::make_unique<MetatomicSystemAdaptorKokkos<DeviceType>>(lmp, options);
 
-  // request NL with the new adaptor
-  auto requested_nl = mta_data->model->run_method("requested_neighbor_lists");
-  for (const auto& ivalue: requested_nl.toList()) {
-    auto options = ivalue.get().toCustomClass<metatomic_torch::NeighborListOptionsHolder>();
-    auto cutoff = options->engine_cutoff(mta_data->evaluation_options->length_unit());
-    assert(cutoff <= mta_data->max_cutoff);
+    // request NL with the new adaptor
+    auto requested_nl = mta_data->model->run_method("requested_neighbor_lists");
+    for (const auto& ivalue: requested_nl.toList()) {
+        auto options = ivalue.get().toCustomClass<metatomic_torch::NeighborListOptionsHolder>();
+        auto cutoff = options->engine_cutoff(mta_data->evaluation_options->length_unit());
+        assert(cutoff <= mta_data->max_cutoff);
 
-    this->system_adaptor->add_nl_request(cutoff, options);
-  }
+        this->system_adaptor->add_nl_request(cutoff, options);
+    }
 
-  // Sync mass data to device
-  atomKK->k_mass.modify_host();
-  atomKK->k_mass.sync<DeviceType>();
+    // Sync mass data to device
+    atomKK->k_mass.modify_host();
+    atomKK->k_mass.sync<DeviceType>();
 
-  // Allocate Kokkos view for force snapshot
-  f_pre_kk = typename AT::t_kkfloat_2d("fix_metatomic:f_pre", atom->nmax, 3);
+    // Allocate Kokkos view for force snapshot
+    f_pre_kk = typename AT::t_kkfloat_2d("fix_metatomic:f_pre", atom->nmax, 3);
 }
 
 /* ---------------------------------------------------------------------- */
 
 template<class DeviceType>
-void FixMetatomicKokkos<DeviceType>::pick_device(c10::Device& device, const char* requested)
-{
-  // Pick device based on Kokkos execution space
-  device = KokkosDeviceToTorch<DeviceType>::convert();
+void FixMetatomicKokkos<DeviceType>::pick_device(c10::Device& device, const char* requested) {
+    // Pick device based on Kokkos execution space
+    device = KokkosDeviceToTorch<DeviceType>::convert();
 
-  if (requested != nullptr) {
-      auto requested_str = std::string(requested);
-      std::transform(requested_str.begin(), requested_str.end(), requested_str.begin(), ::tolower);
-      if (c10::DeviceTypeName(device.type(), /*lower_case=*/true) != requested_str) {
-          error->all(FLERR,
-              "requested device '{}' does not match the device being used by kokkos '{}', "
-              "use the non-kokkos version of this fix to use a different "
-              "device for the model and LAMMPS",
-              requested, device.str()
-          );
-      }
-  }
+    if (requested != nullptr) {
+        auto requested_str = std::string(requested);
+        std::transform(requested_str.begin(), requested_str.end(), requested_str.begin(), ::tolower);
+        if (c10::DeviceTypeName(device.type(), /*lower_case=*/true) != requested_str) {
+            error->all(FLERR,
+                "requested device '{}' does not match the device being used by kokkos '{}', "
+                "use the non-kokkos version of this fix to use a different "
+                "device for the model and LAMMPS",
+                requested, device.str()
+            );
+        }
+    }
 }
 
 /* ---------------------------------------------------------------------- */
 
 template<class DeviceType>
-void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/)
-{
-  // ML-driven position and momentum updates using Kokkos
-  // This is the main integration step where the ML model predicts new positions and momenta
+void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/) {
+    // ML-driven position and momentum updates using Kokkos
+    // This is the main integration step where the ML model predicts new positions and momenta
 
-  // Get views to atom data on device
-  auto x = atomKK->k_x.view<DeviceType>();
-  auto v = atomKK->k_v.view<DeviceType>();
-  auto f = atomKK->k_f.view<DeviceType>();
-  auto rmass = atomKK->k_rmass.view<DeviceType>();
-  auto mass = atomKK->k_mass.view<DeviceType>();
-  auto type = atomKK->k_type.view<DeviceType>();
-  auto mask = atomKK->k_mask.view<DeviceType>();
+    // Get views to atom data on device
+    auto x = atomKK->k_x.view<DeviceType>();
+    auto v = atomKK->k_v.view<DeviceType>();
+    auto f = atomKK->k_f.view<DeviceType>();
+    auto rmass = atomKK->k_rmass.view<DeviceType>();
+    auto mass = atomKK->k_mass.view<DeviceType>();
+    auto type = atomKK->k_type.view<DeviceType>();
+    auto mask = atomKK->k_mask.view<DeviceType>();
 
-  auto groupbit = this->groupbit;
+    auto groupbit = this->groupbit;
 
-  // Sync data to execution space and immediately claim ownership
-  // This prevents output->write() from causing data corruption on next timestep
-  atomKK->sync(execution_space, datamask_read);
-  atomKK->modified(execution_space, datamask_modify);
+    // Sync data to execution space and immediately claim ownership
+    // This prevents output->write() from causing data corruption on next timestep
+    atomKK->sync(execution_space, datamask_read);
+    atomKK->modified(execution_space, datamask_modify);
 
-  int nlocal = atomKK->nlocal;
-  int nghost = atomKK->nghost;
-  int nall = nlocal + nghost;
-  if (igroup == atomKK->firstgroup) nlocal = atomKK->nfirst;
+    int nlocal = atomKK->nlocal;
+    int nghost = atomKK->nghost;
+    int nall = nlocal + nghost;
+    if (igroup == atomKK->firstgroup) {
+        nlocal = atomKK->nfirst;
+    }
 
-  // Determine dtype for the model
-  auto dtype = torch::kFloat64;
-  if (mta_data->capabilities->dtype() == "float64") {
-      dtype = torch::kFloat64;
-  } else if (mta_data->capabilities->dtype() == "float32") {
-      dtype = torch::kFloat32;
-  } else {
-      error->all(FLERR, "the model requested an unsupported dtype '{}'", mta_data->capabilities->dtype());
-  }
+    // Determine dtype for the model
+    auto dtype = torch::kFloat64;
+    if (mta_data->capabilities->dtype() == "float64") {
+        dtype = torch::kFloat64;
+    } else if (mta_data->capabilities->dtype() == "float32") {
+        dtype = torch::kFloat32;
+    } else {
+        error->all(FLERR, "the model requested an unsupported dtype '{}'", mta_data->capabilities->dtype());
+    }
 
-  // Transform from LAMMPS to metatomic System using Kokkos adaptor
-  auto system = this->system_adaptor->system_from_lmp(
-      mta_list,
-      static_cast<bool>(vflag_global),
-      dtype,
-      mta_data->device
-  );
+    // Transform from LAMMPS to metatomic System using Kokkos adaptor
+    auto system = this->system_adaptor->system_from_lmp(
+        mta_list,
+        static_cast<bool>(vflag_global),
+        dtype,
+        mta_data->device
+    );
 
-  // Gather masses in a tensor - create directly on device
-  auto float_tensor_options = torch::TensorOptions().dtype(torch::kFloat64).device(mta_data->device);
-  torch::Tensor masses;
-  if (rmass.data()) {
-      // Per-atom masses: create tensor directly from device pointer
-      masses = torch::from_blob(
-          rmass.data(), {nall},
-          float_tensor_options.requires_grad(false)
-      ).clone();
-  } else {
-      // Type-based masses: map from atom type to mass on device
-      masses = torch::empty({nall}, float_tensor_options);
-      auto masses_kk = UnmanagedView<double*, DeviceType>(
-          masses.data_ptr<double>(), nall
-      );
-      Kokkos::parallel_for(
-          nall,
-          KOKKOS_LAMBDA(int i) {
-              masses_kk[i] = mass[type[i]];
-          }
-      );
-  }
+    // Gather masses in a tensor - create directly on device
+    auto float_tensor_options = torch::TensorOptions().dtype(torch::kFloat64).device(mta_data->device);
+    torch::Tensor masses;
+    if (rmass.data()) {
+        // Per-atom masses: create tensor directly from device pointer
+        masses = torch::from_blob(
+            rmass.data(), {nall},
+            float_tensor_options.requires_grad(false)
+        ).clone();
+    } else {
+        // Type-based masses: map from atom type to mass on device
+        masses = torch::empty({nall}, float_tensor_options);
+        auto masses_kk = UnmanagedView<double*, DeviceType>(
+            masses.data_ptr<double>(), nall
+        );
+        Kokkos::parallel_for(nall,
+            KOKKOS_LAMBDA(int i) { masses_kk[i] = mass[type[i]]; }
+        );
+    }
 
-  auto label_tensor_options = torch::TensorOptions().dtype(torch::kInt32).device(mta_data->device);
-
-  // Add masses to system
-  {
-    metatensor_torch::Labels keys = metatensor_torch::LabelsHolder::single()->to(mta_data->device);
-    auto samples_tensor = torch::column_stack({
+    auto label_tensor_options = torch::TensorOptions().dtype(torch::kInt32).device(mta_data->device);
+    auto samples_values = torch::column_stack({
         torch::zeros(nall, label_tensor_options).unsqueeze(1),
         torch::arange(nall, label_tensor_options).unsqueeze(1)
     });
-    metatensor_torch::Labels samples = torch::make_intrusive<metatensor_torch::LabelsHolder>(
-      std::vector<std::string>{"system","atom"}, samples_tensor);
-    auto properties = metatensor_torch::LabelsHolder::single()->to(mta_data->device);
-    auto block = torch::make_intrusive<metatensor_torch::TensorBlockHolder>(
-      masses.to(torch::TensorOptions().dtype(torch::kFloat32)).unsqueeze(-1),
-      samples,
-      std::vector<metatensor_torch::Labels>{},
-      properties
-    );
-    auto blocks = std::vector<metatensor_torch::TensorBlock>{block};
-    auto tmap = torch::make_intrusive<metatensor_torch::TensorMapHolder>(keys, blocks);
-    system->add_data("masses", tmap, /*override=*/true);
-  }
-
-  // Add momenta to the system
-  {
-    // Create velocities tensor directly from device pointer (no host transfer)
-    auto velocities = torch::from_blob(
-        v.data(), {nall, 3},
-        float_tensor_options.requires_grad(false)
-    ).clone();
-
-    // Compute momenta = mass * velocity with unit conversion
-    // Unit conversion factor for metal units (see fix_metatomic.cpp for details)
-    auto momenta = masses.unsqueeze(1) * velocities * this->momentum_conversion_factor;
-
-    // Create TensorBlock for momenta
-    auto keys = metatensor_torch::LabelsHolder::single()->to(mta_data->device);
-    auto values = momenta.unsqueeze(-1); // add property dimension
-
-    // Define samples
-    auto sample_value_components = std::vector<torch::Tensor>{
-        torch::zeros(nall, label_tensor_options).unsqueeze(1),
-        torch::arange(nall, label_tensor_options).unsqueeze(1)
-    };
-    auto sample_values = torch::column_stack(sample_value_components);
-    metatensor_torch::Labels samples = torch::make_intrusive<metatensor_torch::LabelsHolder>(
-        std::vector<std::string>{"system", "atom"}, sample_values
+    auto samples = torch::make_intrusive<metatensor_torch::LabelsHolder>(
+        std::vector<std::string>{"system","atom"}, samples_values
     );
 
-    // Define components
-    auto component_values = torch::arange(3, label_tensor_options).unsqueeze(1);
-    metatensor_torch::Labels components = torch::make_intrusive<metatensor_torch::LabelsHolder>(
-        std::vector<std::string>{"xyz"}, component_values
+    // Add masses to system
+    {
+        auto keys = metatensor_torch::LabelsHolder::single()->to(mta_data->device);
+        auto properties = metatensor_torch::LabelsHolder::single()->to(mta_data->device);
+        auto block = torch::make_intrusive<metatensor_torch::TensorBlockHolder>(
+            masses.to(torch::TensorOptions().dtype(torch::kFloat32)).unsqueeze(-1),
+            samples,
+            std::vector<metatensor_torch::Labels>{},
+            properties
+        );
+        auto tensor = torch::make_intrusive<metatensor_torch::TensorMapHolder>(
+            keys,
+            std::vector<metatensor_torch::TensorBlock>{block}
+        );
+        system->add_data("masses", tensor, /*override=*/true);
+    }
+
+    // Add momenta to the system
+    {
+        // Create velocities tensor directly from device pointer (no host transfer)
+        auto velocities = torch::from_blob(
+            v.data(), {nall, 3},
+            float_tensor_options.requires_grad(false)
+        ).clone();
+
+        // Compute momenta = mass * velocity with unit conversion
+        // Unit conversion factor for metal units (see fix_metatomic.cpp for details)
+        auto momenta = masses.unsqueeze(1) * velocities * this->momentum_conversion_factor;
+
+        // Create TensorBlock for momenta
+        auto keys = metatensor_torch::LabelsHolder::single()->to(mta_data->device);
+        auto values = momenta.unsqueeze(-1); // add property dimension
+
+        // Define components
+        auto component_values = torch::arange(3, label_tensor_options).unsqueeze(1);
+        metatensor_torch::Labels components = torch::make_intrusive<metatensor_torch::LabelsHolder>(
+            std::vector<std::string>{"xyz"}, component_values
+        );
+
+        auto properties = metatensor_torch::LabelsHolder::single()->to(mta_data->device);
+        auto block = torch::make_intrusive<metatensor_torch::TensorBlockHolder>(
+            values.to(torch::TensorOptions().dtype(torch::kFloat32)),
+            samples,
+            std::vector<metatensor_torch::Labels>{components},
+            properties
+        );
+        auto tensor = torch::make_intrusive<metatensor_torch::TensorMapHolder>(
+            keys,
+            std::vector<metatensor_torch::TensorBlock>{block}
+        );
+        system->add_data("momenta", tensor, /*override=*/true);
+    }
+
+    // Configure selected atoms for evaluation
+    // Only run the calculation for atoms in the current domain (exclude ghost atoms)
+    // TODO: select atoms based on the group mask instead of just nlocal
+    mta_data->selected_atoms_values.resize_({atomKK->nlocal, 2});
+    mta_data->selected_atoms_values.index_put_({torch::indexing::Slice(), 0}, 0);
+    auto options = mta_data->selected_atoms_values.options();
+    mta_data->selected_atoms_values.index_put_(
+        {torch::indexing::Slice(), 1},
+        torch::arange(atomKK->nlocal, options)
     );
 
-    auto properties = metatensor_torch::LabelsHolder::single()->to(mta_data->device);
-    auto block = torch::make_intrusive<metatensor_torch::TensorBlockHolder>(
-      values.to(torch::TensorOptions().dtype(torch::kFloat32)),
-      samples,
-      std::vector<metatensor_torch::Labels>{components},
-      properties
+    auto selected_atoms = torch::make_intrusive<metatensor_torch::LabelsHolder>(
+        std::vector<std::string>{"system", "atom"}, mta_data->selected_atoms_values
     );
-    auto blocks = std::vector<metatensor_torch::TensorBlock>{block};
-    auto tmap = torch::make_intrusive<metatensor_torch::TensorMapHolder>(keys, blocks);
-    system->add_data("momenta", tmap, /*override=*/true);
-  }
+    mta_data->evaluation_options->set_selected_atoms(selected_atoms);
 
-  // Configure selected atoms for evaluation
-  // Only run the calculation for atoms in the current domain (exclude ghost atoms)
-  // TODO: select atoms based on the group mask instead of just nlocal
-  mta_data->selected_atoms_values.resize_({atomKK->nlocal, 2});
-  mta_data->selected_atoms_values.index_put_({torch::indexing::Slice(), 0}, 0);
-  auto options = mta_data->selected_atoms_values.options();
-  mta_data->selected_atoms_values.index_put_(
-      {torch::indexing::Slice(), 1},
-      torch::arange(atomKK->nlocal, options)
-  );
+    // Call the ML model to predict new positions and momenta
+    torch::IValue result_ivalue;
+    try {
+        result_ivalue = mta_data->model->forward({
+            std::vector<metatomic_torch::System>{system},
+            mta_data->evaluation_options,
+            mta_data->check_consistency
+        });
+    } catch (const std::exception& e) {
+        error->all(FLERR, "error evaluating the torch model: {}", e.what());
+    }
 
-  auto selected_atoms = torch::make_intrusive<metatensor_torch::LabelsHolder>(
-      std::vector<std::string>{"system", "atom"}, mta_data->selected_atoms_values
-  );
-  mta_data->evaluation_options->set_selected_atoms(selected_atoms);
+    // Extract results from the model output
+    auto result = result_ivalue.toGenericDict();
 
-  // Call the ML model to predict new positions and momenta
-  torch::IValue result_ivalue;
-  try {
-      result_ivalue = mta_data->model->forward({
-          std::vector<metatomic_torch::System>{system},
-          mta_data->evaluation_options,
-          mta_data->check_consistency
-      });
-  } catch (const std::exception& e) {
-      error->all(FLERR, "error evaluating the torch model: {}", e.what());
-  }
+    // Extract predicted positions (keep on device)
+    auto positions_map = result.at("positions").toCustomClass<metatensor_torch::TensorMapHolder>();
+    auto positions_block = metatensor_torch::TensorMapHolder::block_by_id(positions_map, 0);
+    auto positions = positions_block->values().squeeze(-1).to(mta_data->device).to(torch::kFloat64).contiguous();
 
-  // Extract results from the model output
-  auto result = result_ivalue.toGenericDict();
+    // Extract predicted momenta (keep on device)
+    auto momenta_map = result.at("momenta").toCustomClass<metatensor_torch::TensorMapHolder>();
+    auto momenta_block = metatensor_torch::TensorMapHolder::block_by_id(momenta_map, 0);
+    auto momenta = momenta_block->values().squeeze(-1).to(mta_data->device).to(torch::kFloat64);
 
-  // Extract predicted positions (keep on device)
-  auto positions_map = result.at("positions").toCustomClass<metatensor_torch::TensorMapHolder>();
-  auto positions_block = metatensor_torch::TensorMapHolder::block_by_id(positions_map, 0);
-  auto positions = positions_block->values().squeeze(-1).to(mta_data->device).to(torch::kFloat64).contiguous();
+    // Convert momenta back from model units to LAMMPS velocity units
+    momenta = momenta / this->momentum_conversion_factor;
+    momenta = momenta.contiguous();
 
-  // Extract predicted momenta (keep on device)
-  auto momenta_map = result.at("momenta").toCustomClass<metatensor_torch::TensorMapHolder>();
-  auto momenta_block = metatensor_torch::TensorMapHolder::block_by_id(momenta_map, 0);
-  auto momenta = momenta_block->values().squeeze(-1).to(mta_data->device).to(torch::kFloat64);
+    // Wrap torch tensors with UnmanagedView for device access
+    auto positions_kk = UnmanagedView<double**, DeviceType>(
+        positions.template data_ptr<double>(),
+        positions.size(0), 3
+    );
+    auto momenta_kk = UnmanagedView<double**, DeviceType>(
+        momenta.template data_ptr<double>(),
+        momenta.size(0), 3
+    );
 
-  // Convert momenta back from model units to LAMMPS velocity units
-  momenta = momenta / this->momentum_conversion_factor;
-  momenta = momenta.contiguous();
-
-  // Wrap torch tensors with UnmanagedView for device access
-  auto positions_kk = UnmanagedView<double**, DeviceType>(
-      positions.template data_ptr<double>(),
-      positions.size(0), 3
-  );
-  auto momenta_kk = UnmanagedView<double**, DeviceType>(
-      momenta.template data_ptr<double>(),
-      momenta.size(0), 3
-  );
-
-  // Prepare masses view for device access
-  // Copy masses to device if needed
-  typename AT::t_kkfloat_1d masses_kk;
-  if (rmass.data()) {
-      masses_kk = rmass;
-  } else {
-      // Create a per-atom mass array from type-based masses
-      masses_kk = typename AT::t_kkfloat_1d("fix_metatomic:masses", nall);
-      Kokkos::parallel_for(
-          nall,
-          KOKKOS_LAMBDA(int i) {
-              masses_kk[i] = mass[type[i]];
-          }
-      );
-  }
+    // Prepare masses view for device access
+    // Copy masses to device if needed
+    typename AT::t_kkfloat_1d masses_kk;
+    if (rmass.data()) {
+        masses_kk = rmass;
+    } else {
+        // Create a per-atom mass array from type-based masses
+        masses_kk = typename AT::t_kkfloat_1d("fix_metatomic:masses", nall);
+        Kokkos::parallel_for(nall,
+            KOKKOS_LAMBDA(int i) { masses_kk[i] = mass[type[i]]; }
+        );
+    }
 
     // Helper reducers to avoid repetitive parallel_reduce calls
     auto reduce_mass = [&](void) -> double {
@@ -350,7 +336,9 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/)
         Kokkos::parallel_reduce(
             nlocal,
             KOKKOS_LAMBDA(int i, double &sum) {
-                if (mask[i] & groupbit) sum += masses_kk[i];
+                if (mask[i] & groupbit) {
+                    sum += masses_kk[i];
+                }
             },
             out
         );
@@ -364,9 +352,7 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/)
             KOKKOS_LAMBDA(int i, double &sum) {
                 if (mask[i] & groupbit) {
                     double mi = masses_kk[i];
-                    if (comp == 0) sum += mi * x(i, 0);
-                    else if (comp == 1) sum += mi * x(i, 1);
-                    else sum += mi * x(i, 2);
+                    sum += mi * x(i, comp);
                 }
             },
             out
@@ -381,9 +367,7 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/)
             KOKKOS_LAMBDA(int i, double &sum) {
                 if (mask[i] & groupbit) {
                     double mi = masses_kk[i];
-                    if (comp == 0) sum += mi * v(i, 0);
-                    else if (comp == 1) sum += mi * v(i, 1);
-                    else sum += mi * v(i, 2);
+                    sum += mi * v(i, comp);
                 }
             },
             out
@@ -491,76 +475,77 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/)
 /* ---------------------------------------------------------------------- */
 
 template<class DeviceType>
-void FixMetatomicKokkos<DeviceType>::post_force(int /*vflag*/)
-{
-  // Here, we take a snapshot of the forces for compatibility with fixes which add
-  // forces at post_force() time, e.g. fix langevin, fix plumed, etc.
-  // This allows us to isolate forces added after this point and add them during
-  // our final_integrate() step.
-  // Crucially, this means that fix metatomic needs to be the first fix in the
-  // post_force() sequence, i.e., the user must have it before any other fix that adds
-  // forces in the input script.
+void FixMetatomicKokkos<DeviceType>::post_force(int /*vflag*/) {
+    // Here, we take a snapshot of the forces for compatibility with fixes which
+    // add forces at post_force() time, e.g. fix langevin, fix plumed, etc. This
+    // allows us to isolate forces added after this point and add them during
+    // our final_integrate() step.
+    //
+    // Crucially, this means that fix metatomic needs to be the first fix in the
+    // post_force() sequence, i.e., the user must have it before any other fix
+    // that adds forces in the input script.
 
-  auto f = atomKK->k_f.template view<DeviceType>();
-  atomKK->sync(execution_space, F_MASK);
+    auto f = atomKK->k_f.template view<DeviceType>();
+    atomKK->sync(execution_space, F_MASK);
 
-  int nlocal = atomKK->nlocal;
-  if (igroup == atomKK->firstgroup) nlocal = atomKK->nfirst;
+    int nlocal = atomKK->nlocal;
+    if (igroup == atomKK->firstgroup) nlocal = atomKK->nfirst;
 
-  // Resize force snapshot if needed to accommodate all atoms
-  if (f_pre_kk.extent(0) < (size_t)atom->nmax) {
-      f_pre_kk = typename AT::t_kkfloat_2d("fix_metatomic:f_pre", atom->nmax, 3);
-  }
-  auto f_pre_sub = Kokkos::subview(f_pre_kk, std::make_pair(0, nlocal), Kokkos::ALL);
-  auto f_sub = Kokkos::subview(f, std::make_pair(0, nlocal), Kokkos::ALL);
-  Kokkos::deep_copy(f_pre_sub, f_sub);
+    // Resize force snapshot if needed to accommodate all atoms
+    if (f_pre_kk.extent(0) < (size_t)atom->nmax) {
+        f_pre_kk = typename AT::t_kkfloat_2d("fix_metatomic:f_pre", atom->nmax, 3);
+    }
+    auto f_pre_sub = Kokkos::subview(f_pre_kk, std::make_pair(0, nlocal), Kokkos::ALL);
+    auto f_sub = Kokkos::subview(f, std::make_pair(0, nlocal), Kokkos::ALL);
+    Kokkos::deep_copy(f_pre_sub, f_sub);
 }
 
 /* ---------------------------------------------------------------------- */
 
 template<class DeviceType>
-void FixMetatomicKokkos<DeviceType>::final_integrate()
-{
-  // Apply velocity corrections from forces added after post_force
-  // This handles stochastic forces from Langevin thermostats by applying only
-  // the incremental force (f_current - f_snapshot) to velocities
+void FixMetatomicKokkos<DeviceType>::final_integrate() {
+    // Apply velocity corrections from forces added after post_force
+    // This handles stochastic forces from Langevin thermostats by applying only
+    // the incremental force (f_current - f_snapshot) to velocities
 
-  auto v = atomKK->k_v.template view<DeviceType>();
-  auto f = atomKK->k_f.template view<DeviceType>();
-  auto rmass = atomKK->k_rmass.template view<DeviceType>();
-  auto mass = atomKK->k_mass.template view<DeviceType>();
-  auto type = atomKK->k_type.template view<DeviceType>();
-  auto mask = atomKK->k_mask.template view<DeviceType>();
+    auto v = atomKK->k_v.template view<DeviceType>();
+    auto f = atomKK->k_f.template view<DeviceType>();
+    auto rmass = atomKK->k_rmass.template view<DeviceType>();
+    auto mass = atomKK->k_mass.template view<DeviceType>();
+    auto type = atomKK->k_type.template view<DeviceType>();
+    auto mask = atomKK->k_mask.template view<DeviceType>();
 
-  // Sync data and mark velocities as modified
-  atomKK->sync(execution_space, V_MASK | F_MASK | MASK_MASK | RMASS_MASK | TYPE_MASK);
-  atomKK->modified(execution_space, V_MASK);
+    // Sync data and mark velocities as modified
+    atomKK->sync(execution_space, V_MASK | F_MASK | MASK_MASK | RMASS_MASK | TYPE_MASK);
+    atomKK->modified(execution_space, V_MASK);
 
-  auto f_pre_kk = this->f_pre_kk;
-  auto groupbit = this->groupbit;
+    auto f_pre_kk = this->f_pre_kk;
+    auto groupbit = this->groupbit;
 
-  int nlocal = atomKK->nlocal;
-  if (igroup == atomKK->firstgroup) nlocal = atomKK->nfirst;
+    int nlocal = atomKK->nlocal;
+    if (igroup == atomKK->firstgroup) {
+        nlocal = atomKK->nfirst;
+    }
 
-  double dtf = update->dt * force->ftm2v;
-  bool use_rmass = rmass.data() != nullptr;
+    double dtf = update->dt * force->ftm2v;
+    bool use_rmass = rmass.data() != nullptr;
 
-  // Apply force corrections using Kokkos parallel operation
-  // Only atoms in the specified group are updated
-  Kokkos::parallel_for(
-      nlocal,
-      KOKKOS_LAMBDA(int i) {
-          if (mask[i] & groupbit) {
-              double mass_i = use_rmass ? rmass[i] : mass[type[i]];
-              double dtfm = dtf / mass_i;
+    // Apply force corrections using Kokkos parallel operation
+    // Only atoms in the specified group are updated
+    Kokkos::parallel_for(
+        nlocal,
+        KOKKOS_LAMBDA(int i) {
+            if (mask[i] & groupbit) {
+                double mass_i = use_rmass ? rmass[i] : mass[type[i]];
+                double dtfm = dtf / mass_i;
 
-              // Apply only the incremental force (f - f_pre) to velocities
-              v(i, 0) += (f(i, 0) - f_pre_kk(i, 0)) * dtfm;
-              v(i, 1) += (f(i, 1) - f_pre_kk(i, 1)) * dtfm;
-              v(i, 2) += (f(i, 2) - f_pre_kk(i, 2)) * dtfm;
-          }
-      }
-  );
+                // Apply only the incremental force (f - f_pre) to velocities
+                v(i, 0) += (f(i, 0) - f_pre_kk(i, 0)) * dtfm;
+                v(i, 1) += (f(i, 1) - f_pre_kk(i, 1)) * dtfm;
+                v(i, 2) += (f(i, 2) - f_pre_kk(i, 2)) * dtfm;
+            }
+        }
+    );
 }
 
 /* ---------------------------------------------------------------------- */

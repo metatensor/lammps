@@ -50,229 +50,241 @@ using namespace FixConst;
 
 /* ---------------------------------------------------------------------- */
 
-FixMetatomic::FixMetatomic(LAMMPS *lmp, int narg, char **arg) :
-  Fix(lmp, narg, arg)
-{
-  // Check for multiple MPI processes - not currently supported
-  if (comm->nprocs > 1) {
-      error->all(FLERR, "fix metatomic does not support multiple MPI processes yet");
-  }
-
-  // Determine unit system for the ML model
-  // Currently only 'metal' units are fully supported for momenta
-  std::string energy_unit;
-  std::string length_unit;
-  if (strcmp(update->unit_style, "metal") == 0) {
-      length_unit = "angstrom";
-      this->momentum_conversion_factor = (0.001 / 0.09822694743391452);
-  } else {
-      error->all(FLERR, "unsupported units '{}' for fix metatomic", update->unit_style);
-  }
-
-  // For now, only metal units are fully tested and supported
-  if (strcmp(update->unit_style, "metal") != 0) {
-      error->all(FLERR, "fix metatomic currently only supports 'metal' units");
-  }
-
-  if (narg < 4) {
-      error->all(FLERR,
-          "Illegal fix metatomic command: expected at least 4 arguments (fix ID group-ID metatomic model_path ...); got %d",
-          narg);
-  }
-
-  bool types_are_set = false;
-  this->model_path = arg[3];
-  std::vector<int> parsed_types;
-
-  int iarg = 4;
-  while (iarg < narg) {
-    if (strcmp(arg[iarg], "types") == 0) {
-      types_are_set = true;
-      // Require exactly atom->ntypes integer values after the "types" keyword.
-      iarg++;
-      if (iarg + atom->ntypes > narg) {
-        error->all(FLERR, "Illegal fix metatomic command: expected %d type values after 'types'", atom->ntypes);
-      }
-      for (int ti = 0; ti < atom->ntypes; ++ti) {
-        int type = -1;
-        const char *argstr = arg[iarg + ti];
-        try {
-          type = std::stoi(argstr);
-        } catch (const std::invalid_argument &) {
-          error->all(FLERR, "Illegal fix metatomic command: expected integer for type %d, got '%s'", ti + 1, argstr);
-        } catch (const std::out_of_range &) {
-          error->all(FLERR, "Illegal fix metatomic command: type value out of range for argument '%s'", argstr);
-        }
-        if (type <= 0) {
-          error->all(FLERR, "Illegal fix metatomic command: type %d should be > 0", type);
-        }
-        parsed_types.push_back(type);
-      }
-      iarg += atom->ntypes;
-    } else if (strcmp(arg[iarg], "device") == 0) {
-      if (iarg + 1 >= narg) {
-          error->all(FLERR,
-              "Illegal fix metatomic command: 'device' expects an argument specifying the device (e.g. cpu, cuda, mps)");
-      }
-      requested_device = arg[iarg + 1];
-      iarg += 2;
-    } else if (strcmp(arg[iarg], "extensions_directory") == 0) {
-      if (iarg + 1 >= narg) {
-          error->all(FLERR,
-              "Illegal fix metatomic command: 'extensions_directory' expects an argument specifying the directory path");
-      }
-      this->extensions_directory = arg[iarg + 1];
-      iarg += 2;
-    } else {
-      error->all(FLERR,
-          "Illegal fix metatomic command: unrecognized option '%s' (expected 'types', 'device', or `extensions_directory`)", arg[iarg]);
+FixMetatomic::FixMetatomic(LAMMPS *lmp, int narg, char **arg): Fix(lmp, narg, arg) {
+    // Check for multiple MPI processes - not currently supported
+    if (comm->nprocs > 1) {
+        error->all(FLERR, "fix metatomic does not support multiple MPI processes yet");
     }
-  }
 
-  if (!types_are_set) {
-    error->all(FLERR, "Illegal fix metatomic command: no types specified");
-  }
+    // Determine unit system for the ML model
+    // Currently only 'metal' units are fully supported for momenta
+    std::string energy_unit;
+    std::string length_unit;
+    if (strcmp(update->unit_style, "metal") == 0) {
+        length_unit = "angstrom";
+        this->momentum_conversion_factor = (0.001 / 0.09822694743391452);
+    } else {
+        error->all(FLERR, "unsupported units '{}' for fix metatomic", update->unit_style);
+    }
 
-  // Allocate and fill the type-mapping (1-based indexing)
-  type_mapping = memory->create(type_mapping, atom->ntypes + 1, "FixMetatomic:type_mapping");
-  for (int i = 1; i <= atom->ntypes; i++) {
-    type_mapping[i] = parsed_types[i - 1];
-  }
+    // For now, only metal units are fully tested and supported
+    if (strcmp(update->unit_style, "metal") != 0) {
+        error->all(FLERR, "fix metatomic currently only supports 'metal' units");
+    }
 
-  this->mta_data = new FixMetatomicData(std::move(length_unit));
+    if (narg < 4) {
+        error->all(FLERR,
+            "Illegal fix metatomic command: expected at least 4 arguments "
+            "(fix ID group-ID metatomic model_path ...); got %d", narg
+        );
+    }
 
-  // FlashMD needs position change delta-q and momenta p
-  auto positions = torch::make_intrusive<metatomic_torch::ModelOutputHolder>();
-  positions->explicit_gradients = {};
-  positions->set_quantity("length");
-  positions->set_unit("Angstrom");
-  positions->per_atom = true;
-  this->mta_data->evaluation_options->outputs.insert("positions", positions);
+    bool types_are_set = false;
+    this->model_path = arg[3];
+    std::vector<int> parsed_types;
 
-  auto momenta = torch::make_intrusive<metatomic_torch::ModelOutputHolder>();
-  momenta->explicit_gradients = {};
-  momenta->set_quantity("momentum");
-  momenta->set_unit("(eV*u)^1/2");
-  momenta->per_atom = true;
-  this->mta_data->evaluation_options->outputs.insert("momenta", momenta);
+    int iarg = 4;
+    while (iarg < narg) {
+        if (strcmp(arg[iarg], "types") == 0) {
+            types_are_set = true;
+            // Require exactly atom->ntypes integer values after the "types" keyword.
+            iarg++;
+            if (iarg + atom->ntypes > narg) {
+                error->all(FLERR,
+                    "Illegal fix metatomic command: expected %d type values "
+                    "after 'types'", atom->ntypes
+                );
+            }
+            for (int ti = 0; ti < atom->ntypes; ++ti) {
+                int type = -1;
+                const char *argstr = arg[iarg + ti];
+                try {
+                    type = std::stoi(argstr);
+                } catch (const std::invalid_argument &) {
+                    error->all(FLERR,
+                        "Illegal fix metatomic command: expected integer for type %d, "
+                        "got '%s'", ti + 1, argstr
+                    );
+                } catch (const std::out_of_range &) {
+                    error->all(FLERR,
+                        "Illegal fix metatomic command: type value out of range "
+                        "for argument '%s'", argstr
+                    );
+                }
+                if (type <= 0) {
+                    error->all(FLERR, "Illegal fix metatomic command: type %d should be > 0", type);
+                }
+                parsed_types.push_back(type);
+            }
+            iarg += atom->ntypes;
+        } else if (strcmp(arg[iarg], "device") == 0) {
+            if (iarg + 1 >= narg) {
+                error->all(FLERR,
+                    "Illegal fix metatomic command: 'device' expects an argument "
+                    "specifying the device (e.g. cpu, cuda, mps)"
+                );
+            }
+            requested_device = arg[iarg + 1];
+            iarg += 2;
+        } else if (strcmp(arg[iarg], "extensions_directory") == 0) {
+            if (iarg + 1 >= narg) {
+                error->all(FLERR,
+                    "Illegal fix metatomic command: 'extensions_directory' expects "
+                    "an argument specifying the directory path"
+                );
+            }
+            this->extensions_directory = arg[iarg + 1];
+            iarg += 2;
+        } else {
+            error->all(FLERR,
+                "Illegal fix metatomic command: unrecognized option '%s' (expected "
+                "'types', 'device', or `extensions_directory`)", arg[iarg]
+            );
+        }
+    }
 
-  time_integrate = 1;  // this tells LAMMPS that this fix advances simulation time
-  dynamic_group_allow = 0;  // we don't allow dynamic groups for now
+    if (!types_are_set) {
+        error->all(FLERR, "Illegal fix metatomic command: no types specified");
+    }
+
+    // Allocate and fill the type-mapping (1-based indexing)
+    type_mapping = memory->create(type_mapping, atom->ntypes + 1, "fix_metatomic:type_mapping");
+    for (int i = 1; i <= atom->ntypes; i++) {
+        type_mapping[i] = parsed_types[i - 1];
+    }
+
+    this->mta_data = new FixMetatomicData(std::move(length_unit));
+
+    // FlashMD needs position change delta-q and momenta p
+    auto positions = torch::make_intrusive<metatomic_torch::ModelOutputHolder>(
+        /*quantity =*/ "length",
+        /*unit =*/ "Angstrom",
+        /*per_atom =*/ true,
+        /*explicit_gradients =*/ std::vector<std::string>{},
+        /*description =*/ ""
+    );
+    this->mta_data->evaluation_options->outputs.insert("positions", positions);
+
+    auto momenta = torch::make_intrusive<metatomic_torch::ModelOutputHolder>(
+        /*quantity =*/ "momentum",
+        /*unit =*/ "(eV*u)^(1/2)",
+        /*per_atom =*/ true,
+        /*explicit_gradients =*/ std::vector<std::string>{},
+        /*description =*/ ""
+    );
+    this->mta_data->evaluation_options->outputs.insert("momenta", momenta);
+
+    time_integrate = 1;  // this tells LAMMPS that this fix advances simulation time
+    dynamic_group_allow = 0;  // we don't allow dynamic groups for now
 }
 
 FixMetatomic::~FixMetatomic() {
-  memory->destroy(type_mapping);
+    memory->destroy(type_mapping);
 }
 
 /* ---------------------------------------------------------------------- */
 
-int FixMetatomic::setmask()
-{
-  int mask = 0;
-  mask |= INITIAL_INTEGRATE;
-  mask |= POST_FORCE;
-  mask |= FINAL_INTEGRATE;
-  return mask;
+int FixMetatomic::setmask() {
+    return INITIAL_INTEGRATE | POST_FORCE | FINAL_INTEGRATE;
 }
 
 /* ---------------------------------------------------------------------- */
 
-void FixMetatomic::init()
-{
-  int fix_metatomic_index = -1;
-  const auto &fixes = modify->get_fix_list();
-  auto it = std::find(fixes.begin(), fixes.end(), this);
-  if (it != fixes.end()) {
-      fix_metatomic_index = int(it - fixes.begin());
-  }
-  if (fix_metatomic_index != 0) {
-      error->all(FLERR, "FixMetatomic should be defined as the first fix (before any other fix)");
-  }
+void FixMetatomic::init() {
+    int fix_metatomic_index = -1;
+    const auto& fixes = modify->get_fix_list();
+    auto it = std::find(fixes.begin(), fixes.end(), this);
+    if (it != fixes.end()) {
+        fix_metatomic_index = int(it - fixes.begin());
+    }
+    if (fix_metatomic_index != 0) {
+        error->all(FLERR, "fix metatomic should be defined as the first fix (before any other fix)");
+    }
 
-  if (comm->nprocs > 1) {
-    error->all(FLERR,"FixMetatomic currently does not support multiple processes");
-  }
+    if (comm->nprocs > 1) {
+        error->all(FLERR,"fix metatomic currently does not support multiple processes");
+    }
 
-  if (!type_mapping) {
-      error->all(FLERR, "FixMetatomic internal error: type_mapping not initialized");
-  }
+    if (!type_mapping) {
+        error->all(FLERR, "fix metatomic internal error: type_mapping not initialized");
+    }
 
-  mta_data->load_model(this->lmp, this->model_path.c_str(), this->extensions_directory.c_str());
+    mta_data->load_model(this->lmp, this->model_path.c_str(), this->extensions_directory.c_str());
 
-  double model_timestep = mta_data->model->attr("module").toModule().attr("timestep").toTensor().item<double>();
-  model_timestep = model_timestep * 1e-3;  // fs to ps (metal units)
-  if (std::abs(update->dt - model_timestep) > 1e-5 * model_timestep) {
-      error->all(FLERR,
-          "FixMetatomic timestep (dt = {}) does not match the model's expected timestep ({}). "
-          "Please set the timestep to match the model.",
-          update->dt, model_timestep);
-  }
+    double model_timestep = mta_data->model->attr("module").toModule().attr("timestep").toTensor().item<double>();
+    model_timestep = model_timestep * 1e-3;  // fs to ps (metal units)
+    if (std::abs(update->dt - model_timestep) > 1e-5 * model_timestep) {
+        error->all(FLERR,
+            "fix metatomic timestep (dt = {}) does not match the model's expected timestep ({}). "
+            "Please set the timestep to match the model.",
+            update->dt, model_timestep);
+    }
 
-  // Select the device to use based on the model's preference, the user choice
-  // and what's available.
-  this->pick_device(mta_data->device, this->requested_device.c_str());
+    // Select the device to use based on the model's preference, the user choice
+    // and what's available.
+    this->pick_device(mta_data->device, this->requested_device.c_str());
 
-  // move all data to the correct device
-  mta_data->model->to(mta_data->device);
-  mta_data->selected_atoms_values = mta_data->selected_atoms_values.to(mta_data->device);
+    // move all data to the correct device
+    mta_data->model->to(mta_data->device);
+    mta_data->selected_atoms_values = mta_data->selected_atoms_values.to(mta_data->device);
 
-  auto message = "Running simulation on " + mta_data->device.str() + " device with " + mta_data->capabilities->dtype() + " data";
-  if (screen) {
-      fprintf(screen, "%s\n", message.c_str());
-  }
-  if (logfile) {
-      fprintf(logfile,"%s\n", message.c_str());
-  }
+    auto message = "Running simulation on " + mta_data->device.str() + " device with " + mta_data->capabilities->dtype() + " data";
+    if (screen) {
+        fprintf(screen, "%s\n", message.c_str());
+    }
+    if (logfile) {
+        fprintf(logfile,"%s\n", message.c_str());
+    }
 
-  // get the model's interaction range
-  auto range = mta_data->capabilities->engine_interaction_range(mta_data->evaluation_options->length_unit());
-  if (range < 0) {
-      error->all(FLERR, "interaction_range is negative for this model");
-  } else if (!std::isfinite(range)) {
-      if (comm->nprocs > 1) {
-          error->all(FLERR,
-              "interaction_range is infinite for this model, "
-              "using multiple MPI domains is not supported"
-          );
-      }
+    // get the model's interaction range
+    auto range = mta_data->capabilities->engine_interaction_range(mta_data->evaluation_options->length_unit());
+    if (range < 0) {
+        error->all(FLERR, "interaction_range is negative for this model");
+    } else if (!std::isfinite(range)) {
+        if (comm->nprocs > 1) {
+            error->all(FLERR,
+                "interaction_range is infinite for this model, "
+                "using multiple MPI domains is not supported"
+            );
+        }
 
-      // determine the maximal cutoff in the NL
-      auto requested_nl = mta_data->model->run_method("requested_neighbor_lists");
-      for (const auto& ivalue: requested_nl.toList()) {
-          auto options = ivalue.get().toCustomClass<metatomic_torch::NeighborListOptionsHolder>();
-          auto cutoff = options->engine_cutoff(mta_data->evaluation_options->length_unit());
+        // determine the maximal cutoff in the NL
+        auto requested_nl = mta_data->model->run_method("requested_neighbor_lists");
+        for (const auto& ivalue: requested_nl.toList()) {
+            auto options = ivalue.get().toCustomClass<metatomic_torch::NeighborListOptionsHolder>();
+            auto cutoff = options->engine_cutoff(mta_data->evaluation_options->length_unit());
 
-          mta_data->max_cutoff = std::max(mta_data->max_cutoff, cutoff);
-      }
-  } else {
-      mta_data->max_cutoff = range;
-  }
+            mta_data->max_cutoff = std::max(mta_data->max_cutoff, cutoff);
+        }
+    } else {
+        mta_data->max_cutoff = range;
+    }
 
-  // Initialize metatensor system object
-  auto options = MetatomicSystemOptions{
-    this->type_mapping,
-    mta_data->max_cutoff,
-    mta_data->check_consistency,
-    /* requires_grad */ false,
-  };
-  this->system_adaptor = std::make_unique<MetatomicSystemAdaptor>(lmp, options);
+    // Initialize metatensor system object
+    auto options = MetatomicSystemOptions{
+        this->type_mapping,
+        mta_data->max_cutoff,
+        mta_data->check_consistency,
+        /* requires_grad */ false,
+    };
+    this->system_adaptor = std::make_unique<MetatomicSystemAdaptor>(lmp, options);
 
-  // We ask LAMMPS for a full neighbor lists because we need to know about
-  // ALL pairs, even if options->full_list() is false. We will then filter
-  // the pairs to only include each pair once where needed.
-  auto request = neighbor->add_request(this, NeighConst::REQ_FULL | NeighConst::REQ_GHOST);
-  request->set_cutoff(mta_data->max_cutoff);
+    // We ask LAMMPS for a full neighbor lists because we need to know about
+    // ALL pairs, even if options->full_list() is false. We will then filter
+    // the pairs to only include each pair once where needed.
+    auto request = neighbor->add_request(this, NeighConst::REQ_FULL | NeighConst::REQ_GHOST);
+    request->set_cutoff(mta_data->max_cutoff);
 
-  // Translate from the metatomic neighbor lists requests to LAMMPS neighbor
-  // lists requests.
-  auto requested_nl = mta_data->model->run_method("requested_neighbor_lists");
-  for (const auto& ivalue: requested_nl.toList()) {
-      auto options = ivalue.get().toCustomClass<metatomic_torch::NeighborListOptionsHolder>();
-      auto cutoff = options->engine_cutoff(mta_data->evaluation_options->length_unit());
-      assert(cutoff <= mta_data->max_cutoff);
+    // Translate from the metatomic neighbor lists requests to LAMMPS neighbor
+    // lists requests.
+    auto requested_nl = mta_data->model->run_method("requested_neighbor_lists");
+    for (const auto& ivalue: requested_nl.toList()) {
+        auto options = ivalue.get().toCustomClass<metatomic_torch::NeighborListOptionsHolder>();
+        auto cutoff = options->engine_cutoff(mta_data->evaluation_options->length_unit());
+        assert(cutoff <= mta_data->max_cutoff);
 
-      this->system_adaptor->add_nl_request(cutoff, options);
-  }
+        this->system_adaptor->add_nl_request(cutoff, options);
+    }
 }
 
 void FixMetatomic::pick_device(c10::Device& device, const char* requested) {
@@ -324,330 +336,328 @@ void FixMetatomic::pick_device(c10::Device& device, const char* requested) {
 }
 
 void FixMetatomic::init_list(int id, NeighList *ptr) {
-  mta_list = ptr;
+    mta_list = ptr;
 }
 
-void FixMetatomic::initial_integrate(int /*vflag*/)
-{
-  // This function performs ML-driven position and momentum updates
-  // It uses a trained model to predict new positions and momenta at each timestep
+void FixMetatomic::initial_integrate(int /*vflag*/) {
+    // This function performs ML-driven position and momentum updates
+    // It uses a trained model to predict new positions and momenta at each timestep
 
-  double **x = atom->x;
-  double **v = atom->v;
-  double *rmass = atom->rmass;
+    double** x = atom->x;
+    double** v = atom->v;
+    double* rmass = atom->rmass;
 
-  int nlocal = atom->nlocal;
-  int nghost = atom->nghost;
-  int nall = nlocal + nghost;
+    int nlocal = atom->nlocal;
+    int nghost = atom->nghost;
+    int nall = nlocal + nghost;
 
-  double *mass = atom->mass;
-  int *type = atom->type;
-  int *mask = atom->mask;
-  if (igroup == atom->firstgroup) {
-    nlocal = atom->nfirst;
-  }
+    double *mass = atom->mass;
+    int *type = atom->type;
+    int *mask = atom->mask;
+    if (igroup == atom->firstgroup) {
+        nlocal = atom->nfirst;
+    }
 
-  auto dtype = torch::kFloat64;
-  if (mta_data->capabilities->dtype() == "float64") {
-      dtype = torch::kFloat64;
-  } else if (mta_data->capabilities->dtype() == "float32") {
-      dtype = torch::kFloat32;
-  } else {
-      error->all(FLERR, "the model requested an unsupported dtype '{}'", mta_data->capabilities->dtype());
-  }
+    auto dtype = torch::kFloat64;
+    if (mta_data->capabilities->dtype() == "float64") {
+        dtype = torch::kFloat64;
+    } else if (mta_data->capabilities->dtype() == "float32") {
+        dtype = torch::kFloat32;
+    } else {
+        error->all(FLERR, "the model requested an unsupported dtype '{}'", mta_data->capabilities->dtype());
+    }
 
-  // transform from LAMMPS to metatomic System
-  auto system = this->system_adaptor->system_from_lmp(
-      mta_list,
-      static_cast<bool>(vflag_global),
-      dtype,
-      mta_data->device
-  );
+    // transform from LAMMPS to metatomic System
+    auto system = this->system_adaptor->system_from_lmp(
+        mta_list,
+        static_cast<bool>(vflag_global),
+        dtype,
+        mta_data->device
+    );
 
-  // gather masses (per-atom) in a tensor and ship to device
-  auto float_tensor_options = torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU);
-  torch::Tensor masses;
-  if (rmass) {
-      masses = torch::from_blob(
-          rmass, {nall},
-          float_tensor_options.requires_grad(false)
-      ).to(mta_data->device);
-  } else {
-      // need to map from atom type to mass
-      std::vector<double> masses_vector(nall);
-      for (int i=0; i<nall; i++) {
-          masses_vector[i] = mass[type[i]];
-      }
-      masses = torch::from_blob(
-          masses_vector.data(), {nall},
-          float_tensor_options.requires_grad(false)
-      ).to(mta_data->device);
-  }
+    // gather masses (per-atom) in a tensor and ship to device
+    auto float_tensor_options = torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU);
+    torch::Tensor masses;
+    if (rmass) {
+        masses = torch::from_blob(
+            rmass,
+            {nall},
+            float_tensor_options.requires_grad(false)
+        ).to(mta_data->device);
+    } else {
+        // need to map from atom type to mass
+        std::vector<double> masses_vector(nall);
+        for (int i=0; i<nall; i++) {
+            masses_vector[i] = mass[type[i]];
+        }
+        masses = torch::from_blob(
+            masses_vector.data(),
+            {nall},
+            float_tensor_options.requires_grad(false)
+        ).to(mta_data->device);
+    }
 
-  auto label_tensor_options = torch::TensorOptions().dtype(torch::kInt32).device(mta_data->device);
-  // add masses to system
-  {
-    metatensor_torch::Labels keys = metatensor_torch::LabelsHolder::single()->to(mta_data->device);
-    auto samples_tensor = torch::column_stack({
+    auto label_tensor_options = torch::TensorOptions().dtype(torch::kInt32).device(mta_data->device);
+    auto samples_values = torch::column_stack({
         torch::zeros(nall, label_tensor_options).unsqueeze(1),
         torch::arange(nall, label_tensor_options).unsqueeze(1)
     });
-    metatensor_torch::Labels samples = torch::make_intrusive<metatensor_torch::LabelsHolder>(
-      std::vector<std::string>{"system","atom"}, samples_tensor);
-    auto properties = metatensor_torch::LabelsHolder::single()->to(mta_data->device);
-    auto block = torch::make_intrusive<metatensor_torch::TensorBlockHolder>(
-      masses.to(torch::TensorOptions().dtype(torch::kFloat32)).unsqueeze(-1),  // add property dimension
-      samples,
-      std::vector<metatensor_torch::Labels>{},
-      properties
+    auto samples = torch::make_intrusive<metatensor_torch::LabelsHolder>(
+        std::vector<std::string>{"system","atom"}, samples_values
     );
-    auto blocks = std::vector<metatensor_torch::TensorBlock>{block};
-    auto tmap = torch::make_intrusive<metatensor_torch::TensorMapHolder>(keys, blocks);
-    system->add_data("masses", tmap, /*override=*/true);
-  }
-
-  // add momenta to the system
-  {
-    // gather velocities in a tensor and ship to device
-    auto velocities = torch::from_blob(
-        // atom->v contains "real" and then ghost atoms, in that order
-        *v, {nall, 3},
-        // since Metatomic is not a force field, there's no need to allocate space to store gradients
-        float_tensor_options.requires_grad(false)
-    ).to(mta_data->device);
-
-    auto momenta = masses.unsqueeze(1) * velocities * this->momentum_conversion_factor;
-
-    // Create TensorBlock for momenta to pass to the ML model
-    auto keys = metatensor_torch::LabelsHolder::single()->to(mta_data->device);
-    auto values = momenta.unsqueeze(-1); // add property dimension
-
-    // define samples
-    auto sample_value_components = std::vector<torch::Tensor>{
-        torch::zeros(nall, label_tensor_options).unsqueeze(1),
-        torch::arange(nall, label_tensor_options).unsqueeze(1)
-    };
-    auto sample_values = torch::column_stack(sample_value_components);
-    metatensor_torch::Labels samples = torch::make_intrusive<metatensor_torch::LabelsHolder>(
-        std::vector<std::string>{"system", "atom"}, sample_values
-    );
-
-    // define components
-    auto component_values = torch::arange(3, label_tensor_options).unsqueeze(1);
-    metatensor_torch::Labels components = torch::make_intrusive<metatensor_torch::LabelsHolder>(
-        std::vector<std::string>{"xyz"}, component_values
-    );
-
-    auto properties = metatensor_torch::LabelsHolder::single()->to(mta_data->device);
-    auto block = torch::make_intrusive<metatensor_torch::TensorBlockHolder>(
-      // TODO: is there a way to check what dtype the model expects for input data?
-      values.to(torch::TensorOptions().dtype(torch::kFloat32)),
-      samples,
-      std::vector<metatensor_torch::Labels>{components},
-      properties
-    );
-    auto blocks = std::vector<metatensor_torch::TensorBlock>{block};
-    auto tmap = torch::make_intrusive<metatensor_torch::TensorMapHolder>(keys, blocks);
-    system->add_data("momenta", tmap, /*override=*/true);
-  }
-
-  // Configure selected atoms for evaluation
-  // Only run the calculation for atoms in the current domain (exclude ghost atoms)
-  // TODO: select atoms based on the group mask instead of just nlocal
-  mta_data->selected_atoms_values.resize_({atom->nlocal, 2});
-  mta_data->selected_atoms_values.index_put_({torch::indexing::Slice(), 0}, 0);
-  auto options = mta_data->selected_atoms_values.options();
-  mta_data->selected_atoms_values.index_put_(
-      {torch::indexing::Slice(), 1},
-      torch::arange(atom->nlocal, options)
-  );
-
-  auto selected_atoms = torch::make_intrusive<metatensor_torch::LabelsHolder>(
-      std::vector<std::string>{"system", "atom"}, mta_data->selected_atoms_values
-  );
-  mta_data->evaluation_options->set_selected_atoms(selected_atoms);
-
-  // Call the ML model to predict new positions and momenta
-  torch::IValue result_ivalue;
-  try {
-      result_ivalue = mta_data->model->forward({
-          std::vector<metatomic_torch::System>{system},
-          mta_data->evaluation_options,
-          mta_data->check_consistency
-      });
-  } catch (const std::exception& e) {
-      error->all(FLERR, "error evaluating the torch model: {}", e.what());
-  }
-
-  // Extract results from the model output
-  auto result = result_ivalue.toGenericDict();
-
-  // Extract predicted positions
-  auto positions_map = result.at("positions").toCustomClass<metatensor_torch::TensorMapHolder>();
-  auto positions_block = metatensor_torch::TensorMapHolder::block_by_id(positions_map, 0);
-  auto positions = positions_block->values().squeeze(-1).to(torch::kCPU).to(torch::kFloat64);
-
-  // Extract predicted momenta
-  auto momenta_map = result.at("momenta").toCustomClass<metatensor_torch::TensorMapHolder>();
-  auto momenta_block = metatensor_torch::TensorMapHolder::block_by_id(momenta_map, 0);
-  auto momenta = momenta_block->values().squeeze(-1).to(torch::kCPU).to(torch::kFloat64);
-
-  // Convert momenta back from model units to LAMMPS velocity units
-  // This reverses the unit conversion applied before the model call
-  momenta = momenta / this->momentum_conversion_factor;
-
-  // Get old center of mass (and its velocity) before updating positions and velocities
-  std::array<double, 3> com_old = {0.0, 0.0, 0.0};
-  std::array<double, 3> com_velocity_old = {0.0, 0.0, 0.0};
-  double total_mass = 0.0;
-  for (int i = 0; i < nlocal; i++) {
-      if (mask[i] & groupbit) {
-          double m_i = rmass ? rmass[i] : mass[type[i]];
-          com_old[0] += x[i][0] * m_i;
-          com_old[1] += x[i][1] * m_i;
-          com_old[2] += x[i][2] * m_i;
-          com_velocity_old[0] += v[i][0] * m_i;
-          com_velocity_old[1] += v[i][1] * m_i;
-          com_velocity_old[2] += v[i][2] * m_i;
-          total_mass += m_i;
-      }
-  }
-  if (total_mass > 0.0) {
-      com_old[0] /= total_mass;
-      com_old[1] /= total_mass;
-      com_old[2] /= total_mass;
-      com_velocity_old[0] /= total_mass;
-      com_velocity_old[1] /= total_mass;
-      com_velocity_old[2] /= total_mass;
-  }
-
-  // Apply ML predictions to LAMMPS atoms
-  for (int i = 0; i < nlocal; i++) {
-      if (mask[i] & groupbit) {
-          // Update positions with ML predictions
-          x[i][0] = positions[i][0].item<double>();
-          x[i][1] = positions[i][1].item<double>();
-          x[i][2] = positions[i][2].item<double>();
-
-          // Update velocities from predicted momenta
-          // Convert momenta back to velocities: v = p / m
-          v[i][0] = momenta[i][0].item<double>() / masses[i].item<double>();
-          v[i][1] = momenta[i][1].item<double>() / masses[i].item<double>();
-          v[i][2] = momenta[i][2].item<double>() / masses[i].item<double>();
-      }
-  }
-
-  std::array<double, 3> com_new = {0.0, 0.0, 0.0};
-  std::array<double, 3> com_velocity_new = {0.0, 0.0, 0.0};
-  for (int i = 0; i < nlocal; i++) {
-      if (mask[i] & groupbit) {
-          double m_i = rmass ? rmass[i] : mass[type[i]];
-          com_new[0] += x[i][0] * m_i;
-          com_new[1] += x[i][1] * m_i;
-          com_new[2] += x[i][2] * m_i;
-          com_velocity_new[0] += v[i][0] * m_i;
-          com_velocity_new[1] += v[i][1] * m_i;
-          com_velocity_new[2] += v[i][2] * m_i;
-      }
-  }
-  if (total_mass > 0.0) {
-      com_new[0] /= total_mass;
-      com_new[1] /= total_mass;
-      com_new[2] /= total_mass;
-      com_velocity_new[0] /= total_mass;
-      com_velocity_new[1] /= total_mass;
-      com_velocity_new[2] /= total_mass;
-  }
-
-  // Adjust positions and velocities to preserve center of mass motion, namely
-  // conservation of momentum of the center of mass and uniform linear motion of the
-  // center of mass.
-  for (int i = 0; i < nlocal; i++) {
-      if (mask[i] & groupbit) {
-          // Update positions with ML predictions
-          x[i][0] = x[i][0] - com_new[0] + com_old[0] + com_velocity_old[0] * update->dt;
-          x[i][1] = x[i][1] - com_new[1] + com_old[1] + com_velocity_old[1] * update->dt;
-          x[i][2] = x[i][2] - com_new[2] + com_old[2] + com_velocity_old[2] * update->dt;
-          v[i][0] = v[i][0] - com_velocity_new[0] + com_velocity_old[0];
-          v[i][1] = v[i][1] - com_velocity_new[1] + com_velocity_old[1];
-          v[i][2] = v[i][2] - com_velocity_new[2] + com_velocity_old[2];
-      }
-  }
-}
-
-void FixMetatomic::post_force(int /*vflag*/)
-{
-  // Here, we take a snapshot of the forces for compatibility with fixes which add
-  // forces at post_force() time, e.g. fix langevin, fix plumed, etc.
-  // This allows us to isolate forces added after this point and add them during
-  // our final_integrate() step.
-  // Crucially, this means that fix metatomic needs to be the first fix in the
-  // post_force() sequence, i.e., the user must have it before any other fix that adds
-  // forces in the input script.
-
-  this->ensure_capacity();
-
-  double **f = atom->f;
-  int *mask = atom->mask;
-
-  int nlocal = atom->nlocal;
-  if (igroup == atom->firstgroup) {
-    nlocal = atom->nfirst;
-  }
-
-  for (int i = 0; i < nlocal; i++) {
-    if (mask[i] & groupbit) {
-      f_pre[i][0] = f[i][0];
-      f_pre[i][1] = f[i][1];
-      f_pre[i][2] = f[i][2];
+    // add masses to system
+    {
+        auto keys = metatensor_torch::LabelsHolder::single()->to(mta_data->device);
+        auto properties = metatensor_torch::LabelsHolder::single()->to(mta_data->device);
+        auto block = torch::make_intrusive<metatensor_torch::TensorBlockHolder>(
+            masses.to(torch::TensorOptions().dtype(torch::kFloat32)).unsqueeze(-1),  // add property dimension
+            samples,
+            std::vector<metatensor_torch::Labels>{},
+            properties
+        );
+        auto tensor = torch::make_intrusive<metatensor_torch::TensorMapHolder>(
+            keys,
+            std::vector<metatensor_torch::TensorBlock>{block}
+        );
+        system->add_data("masses", tensor, /*override=*/true);
     }
-  }
-}
 
-void FixMetatomic::final_integrate()
-{
-  // Apply velocity corrections from forces that were added after post_force
-  // This handles stochastic forces from Langevin thermostats:
-  // - initial_integrate: ML model updates positions and velocities
-  // - post_force: we snapshot forces (includes pair, bond, and Langevin forces)
-  // - Between post_force and final_integrate: additional forces may be added
-  // - final_integrate: we apply only the force difference as a velocity correction
-  // This ensures Langevin forces properly affect the dynamics while allowing
-  // the ML model to handle the deterministic evolution
+    // add momenta to the system
+    {
+        // gather velocities in a tensor and ship to device
+        auto velocities = torch::from_blob(
+            // atom->v contains "real" and then ghost atoms, in that order
+            *v, {nall, 3},
+            float_tensor_options.requires_grad(false)
+        ).to(mta_data->device);
 
-  double dtf = update->dt * force->ftm2v;
+        auto momenta = masses.unsqueeze(1) * velocities * this->momentum_conversion_factor;
 
-  double **v = atom->v;
-  double **f = atom->f;
-  double *rmass = atom->rmass;
-  double *mass = atom->mass;
-  int *type = atom->type;
-  double m_i;
+        // Create TensorBlock for momenta to pass to the ML model
+        auto keys = metatensor_torch::LabelsHolder::single()->to(mta_data->device);
+        auto values = momenta.unsqueeze(-1); // add property dimension
 
-  int nlocal = atom->nlocal;
-  int *mask = atom->mask;
-  if (igroup == atom->firstgroup) nlocal = atom->nfirst;
+        // define components
+        auto component_values = torch::arange(3, label_tensor_options).unsqueeze(1);
+        auto components = torch::make_intrusive<metatensor_torch::LabelsHolder>(
+            std::vector<std::string>{"xyz"}, component_values
+        );
 
-  for (int i = 0; i < nlocal; i++) {
-    if (mask[i] & groupbit) {
-      // Apply only the incremental force (f - f_pre) to velocities
-      // rmass is per-atom mass (if used), otherwise use type-based mass
-      m_i = rmass ? rmass[i] : mass[type[i]];
-      v[i][0] += (f[i][0] - f_pre[i][0]) * dtf / m_i;
-      v[i][1] += (f[i][1] - f_pre[i][1]) * dtf / m_i;
-      v[i][2] += (f[i][2] - f_pre[i][2]) * dtf / m_i;
+        auto properties = metatensor_torch::LabelsHolder::single()->to(mta_data->device);
+        auto block = torch::make_intrusive<metatensor_torch::TensorBlockHolder>(
+            // TODO: is there a way to check what dtype the model expects for input data?
+            values.to(torch::TensorOptions().dtype(torch::kFloat32)),
+            samples,
+            std::vector<metatensor_torch::Labels>{components},
+            properties
+        );
+        auto tensor = torch::make_intrusive<metatensor_torch::TensorMapHolder>(
+            keys,
+            std::vector<metatensor_torch::TensorBlock>{block}
+        );
+        system->add_data("momenta", tensor, /*override=*/true);
     }
-  }
+
+    // Configure selected atoms for evaluation
+    // Only run the calculation for atoms in the current domain (exclude ghost atoms)
+    // TODO: select atoms based on the group mask instead of just nlocal
+    mta_data->selected_atoms_values.resize_({atom->nlocal, 2});
+    mta_data->selected_atoms_values.index_put_({torch::indexing::Slice(), 0}, 0);
+    auto options = mta_data->selected_atoms_values.options();
+    mta_data->selected_atoms_values.index_put_(
+        {torch::indexing::Slice(), 1},
+        torch::arange(atom->nlocal, options)
+    );
+
+    auto selected_atoms = torch::make_intrusive<metatensor_torch::LabelsHolder>(
+        std::vector<std::string>{"system", "atom"}, mta_data->selected_atoms_values
+    );
+    mta_data->evaluation_options->set_selected_atoms(selected_atoms);
+
+    // Call the ML model to predict new positions and momenta
+    torch::IValue result_ivalue;
+    try {
+        result_ivalue = mta_data->model->forward({
+            std::vector<metatomic_torch::System>{system},
+            mta_data->evaluation_options,
+            mta_data->check_consistency
+        });
+    } catch (const std::exception& e) {
+        error->all(FLERR, "error evaluating the torch model: {}", e.what());
+    }
+
+    // Extract results from the model output
+    auto result = result_ivalue.toGenericDict();
+
+    // Extract predicted positions
+    auto positions_map = result.at("positions").toCustomClass<metatensor_torch::TensorMapHolder>();
+    auto positions_block = metatensor_torch::TensorMapHolder::block_by_id(positions_map, 0);
+    auto positions = positions_block->values().squeeze(-1).to(torch::kCPU).to(torch::kFloat64);
+
+    // Extract predicted momenta
+    auto momenta_map = result.at("momenta").toCustomClass<metatensor_torch::TensorMapHolder>();
+    auto momenta_block = metatensor_torch::TensorMapHolder::block_by_id(momenta_map, 0);
+    auto momenta = momenta_block->values().squeeze(-1).to(torch::kCPU).to(torch::kFloat64);
+
+    // Convert momenta back from model units to LAMMPS velocity units
+    // This reverses the unit conversion applied before the model call
+    momenta = momenta / this->momentum_conversion_factor;
+
+    // Get old center of mass (and its velocity) before updating positions and velocities
+    std::array<double, 3> com_old = {0.0, 0.0, 0.0};
+    std::array<double, 3> com_velocity_old = {0.0, 0.0, 0.0};
+    double total_mass = 0.0;
+    for (int i = 0; i < nlocal; i++) {
+        if (mask[i] & groupbit) {
+            double m_i = rmass ? rmass[i] : mass[type[i]];
+            com_old[0] += x[i][0] * m_i;
+            com_old[1] += x[i][1] * m_i;
+            com_old[2] += x[i][2] * m_i;
+            com_velocity_old[0] += v[i][0] * m_i;
+            com_velocity_old[1] += v[i][1] * m_i;
+            com_velocity_old[2] += v[i][2] * m_i;
+            total_mass += m_i;
+        }
+    }
+    if (total_mass > 0.0) {
+        com_old[0] /= total_mass;
+        com_old[1] /= total_mass;
+        com_old[2] /= total_mass;
+        com_velocity_old[0] /= total_mass;
+        com_velocity_old[1] /= total_mass;
+        com_velocity_old[2] /= total_mass;
+    }
+
+    // Apply ML predictions to LAMMPS atoms
+    for (int i = 0; i < nlocal; i++) {
+        if (mask[i] & groupbit) {
+            // Update positions with ML predictions
+            x[i][0] = positions[i][0].item<double>();
+            x[i][1] = positions[i][1].item<double>();
+            x[i][2] = positions[i][2].item<double>();
+
+            // Update velocities from predicted momenta
+            // Convert momenta back to velocities: v = p / m
+            v[i][0] = momenta[i][0].item<double>() / masses[i].item<double>();
+            v[i][1] = momenta[i][1].item<double>() / masses[i].item<double>();
+            v[i][2] = momenta[i][2].item<double>() / masses[i].item<double>();
+        }
+    }
+
+    std::array<double, 3> com_new = {0.0, 0.0, 0.0};
+    std::array<double, 3> com_velocity_new = {0.0, 0.0, 0.0};
+    for (int i = 0; i < nlocal; i++) {
+        if (mask[i] & groupbit) {
+            double m_i = rmass ? rmass[i] : mass[type[i]];
+            com_new[0] += x[i][0] * m_i;
+            com_new[1] += x[i][1] * m_i;
+            com_new[2] += x[i][2] * m_i;
+            com_velocity_new[0] += v[i][0] * m_i;
+            com_velocity_new[1] += v[i][1] * m_i;
+            com_velocity_new[2] += v[i][2] * m_i;
+        }
+    }
+    if (total_mass > 0.0) {
+        com_new[0] /= total_mass;
+        com_new[1] /= total_mass;
+        com_new[2] /= total_mass;
+        com_velocity_new[0] /= total_mass;
+        com_velocity_new[1] /= total_mass;
+        com_velocity_new[2] /= total_mass;
+    }
+
+    // Adjust positions and velocities to preserve center of mass motion, namely
+    // conservation of momentum of the center of mass and uniform linear motion of the
+    // center of mass.
+    for (int i = 0; i < nlocal; i++) {
+        if (mask[i] & groupbit) {
+            // Update positions with ML predictions
+            x[i][0] = x[i][0] - com_new[0] + com_old[0] + com_velocity_old[0] * update->dt;
+            x[i][1] = x[i][1] - com_new[1] + com_old[1] + com_velocity_old[1] * update->dt;
+            x[i][2] = x[i][2] - com_new[2] + com_old[2] + com_velocity_old[2] * update->dt;
+            v[i][0] = v[i][0] - com_velocity_new[0] + com_velocity_old[0];
+            v[i][1] = v[i][1] - com_velocity_new[1] + com_velocity_old[1];
+            v[i][2] = v[i][2] - com_velocity_new[2] + com_velocity_old[2];
+        }
+    }
+}
+
+void FixMetatomic::post_force(int /*vflag*/) {
+    // Here, we take a snapshot of the forces for compatibility with fixes which
+    // add forces at post_force() time, e.g. fix langevin, fix plumed, etc. This
+    // allows us to isolate forces added after this point and add them during
+    // our final_integrate() step.
+
+    // Crucially, this means that fix metatomic needs to be the first fix in the
+    // post_force() sequence, i.e., the user must have it before any other fix
+    // that adds forces in the input script.
+
+    this->ensure_capacity();
+
+    double **f = atom->f;
+    int *mask = atom->mask;
+
+    int nlocal = atom->nlocal;
+    if (igroup == atom->firstgroup) {
+        nlocal = atom->nfirst;
+    }
+
+    for (int i = 0; i < nlocal; i++) {
+        if (mask[i] & groupbit) {
+            f_pre[i][0] = f[i][0];
+            f_pre[i][1] = f[i][1];
+            f_pre[i][2] = f[i][2];
+        }
+    }
+}
+
+void FixMetatomic::final_integrate() {
+    // Apply velocity corrections from forces that were added after post_force
+    // This handles stochastic forces from Langevin thermostats:
+    // - initial_integrate: ML model updates positions and velocities
+    // - post_force: we snapshot forces (includes pair, bond, and Langevin
+    //   forces)
+    // - Between post_force and final_integrate: additional forces may be added
+    // - final_integrate: we apply only the force difference as a velocity
+    //   correction
+    //
+    // This ensures Langevin forces properly affect the dynamics while allowing
+    // the ML model to handle the deterministic evolution
+
+    double dtf = update->dt * force->ftm2v;
+
+    double** v = atom->v;
+    double** f = atom->f;
+    double* rmass = atom->rmass;
+    double* mass = atom->mass;
+    int* type = atom->type;
+    double m_i;
+
+    int nlocal = atom->nlocal;
+    int* mask = atom->mask;
+    if (igroup == atom->firstgroup) nlocal = atom->nfirst;
+
+    for (int i = 0; i < nlocal; i++) {
+        if (mask[i] & groupbit) {
+            // Apply only the incremental force (f - f_pre) to velocities
+            // rmass is per-atom mass (if used), otherwise use type-based mass
+            m_i = rmass ? rmass[i] : mass[type[i]];
+            v[i][0] += (f[i][0] - f_pre[i][0]) * dtf / m_i;
+            v[i][1] += (f[i][1] - f_pre[i][1]) * dtf / m_i;
+            v[i][2] += (f[i][2] - f_pre[i][2]) * dtf / m_i;
+        }
+    }
 }
 
 
-void FixMetatomic::ensure_capacity()
-{
-  // Ensure f_pre array has sufficient capacity for current number of atoms
-  // Reallocate if atom count has grown since last allocation
-  if (atom->nmax > nmax) {
-    this->nmax = atom->nmax;
-    if (f_pre) memory->destroy(f_pre);
-    memory->create(f_pre, this->nmax, 3, "FixMetatomic::f_pre");
-  }
+void FixMetatomic::ensure_capacity() {
+    // Ensure f_pre array has sufficient capacity for current number of atoms
+    // Reallocate if atom count has grown since last allocation
+    if (atom->nmax > nmax) {
+        this->nmax = atom->nmax;
+        if (f_pre) {
+            memory->destroy(f_pre);
+        }
+        memory->create(f_pre, this->nmax, 3, "fix metatomic::f_pre");
+    }
 }
