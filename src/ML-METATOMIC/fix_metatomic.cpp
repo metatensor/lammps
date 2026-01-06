@@ -411,7 +411,7 @@ void FixMetatomic::initial_integrate(int /*vflag*/) {
         auto keys = metatensor_torch::LabelsHolder::single()->to(mta_data->device);
         auto properties = metatensor_torch::LabelsHolder::single()->to(mta_data->device);
         auto block = torch::make_intrusive<metatensor_torch::TensorBlockHolder>(
-            masses.to(torch::TensorOptions().dtype(torch::kFloat32)).unsqueeze(-1),  // add property dimension
+            masses.to(torch::TensorOptions().dtype(dtype)).unsqueeze(-1),  // add property dimension
             samples,
             std::vector<metatensor_torch::Labels>{},
             properties
@@ -446,8 +446,7 @@ void FixMetatomic::initial_integrate(int /*vflag*/) {
 
         auto properties = metatensor_torch::LabelsHolder::single()->to(mta_data->device);
         auto block = torch::make_intrusive<metatensor_torch::TensorBlockHolder>(
-            // TODO: is there a way to check what dtype the model expects for input data?
-            values.to(torch::TensorOptions().dtype(torch::kFloat32)),
+            values.to(torch::TensorOptions().dtype(dtype)),
             samples,
             std::vector<metatensor_torch::Labels>{components},
             properties
