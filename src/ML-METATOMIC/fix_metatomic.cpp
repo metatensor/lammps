@@ -32,6 +32,7 @@
 #include "memory.h"
 #include "modify.h"
 #include "error.h"
+#include "group.h"
 #include "force.h"
 #include "update.h"
 #include "neighbor.h"
@@ -459,15 +460,16 @@ void FixMetatomic::initial_integrate(int /*vflag*/) {
     }
 
     // Configure selected atoms for evaluation
-    // Only run the calculation for atoms in the current domain (exclude ghost atoms)
-    // TODO: select atoms based on the group mask instead of just nlocal
-    mta_data->selected_atoms_values.resize_({atom->nlocal, 2});
+    // Only run the calculation for atoms in the current group
+    mta_data->selected_atoms_values.resize_({group->count(igroup), 2});
     mta_data->selected_atoms_values.index_put_({torch::indexing::Slice(), 0}, 0);
-    auto options = mta_data->selected_atoms_values.options();
-    mta_data->selected_atoms_values.index_put_(
-        {torch::indexing::Slice(), 1},
-        torch::arange(atom->nlocal, options)
-    );
+    int64_t idx = 0;
+    for (int i = 0; i < nlocal; i++) {
+        if (mask[i] & groupbit) {
+            mta_data->selected_atoms_values.index_put_({idx, 1}, i);
+            idx++;
+        }
+    }
 
     auto selected_atoms = torch::make_intrusive<metatensor_torch::LabelsHolder>(
         std::vector<std::string>{"system", "atom"}, mta_data->selected_atoms_values
