@@ -66,7 +66,13 @@ FixMetatomic::FixMetatomic(LAMMPS *lmp, int narg, char **arg): Fix(lmp, narg, ar
     std::string length_unit;
     if (strcmp(update->unit_style, "metal") == 0) {
         length_unit = "angstrom";
-        this->momentum_conversion_factor = (0.001 / 0.09822694743391452);
+        this->momentum_conversion_factor = 10.1805057179 / 1000.0;
+    } else if (strcmp(update->unit_style, "real") == 0) {
+        length_unit = "angstrom";
+        this->momentum_conversion_factor = 10.1805057179;
+    } else if (strcmp(update->unit_style, "si") == 0) {
+        length_unit = "m";
+        this->momentum_conversion_factor = 10.1805057179 / 1.6605390666e-22;
     } else {
         error->all(FLERR, "unsupported units '{}' for fix metatomic", update->unit_style);
     }
@@ -164,7 +170,7 @@ FixMetatomic::FixMetatomic(LAMMPS *lmp, int narg, char **arg): Fix(lmp, narg, ar
     // FlashMD needs position change delta-q and momenta p
     auto positions = torch::make_intrusive<metatomic_torch::ModelOutputHolder>(
         /*quantity =*/ "length",
-        /*unit =*/ "Angstrom",
+        /*unit =*/ length_unit,
         /*per_atom =*/ true,
         /*explicit_gradients =*/ std::vector<std::string>{},
         /*description =*/ ""
