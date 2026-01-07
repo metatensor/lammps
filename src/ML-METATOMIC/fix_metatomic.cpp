@@ -52,6 +52,9 @@ using namespace FixConst;
 /* ---------------------------------------------------------------------- */
 
 FixMetatomic::FixMetatomic(LAMMPS *lmp, int narg, char **arg): Fix(lmp, narg, arg) {
+    time_integrate = 1;  // this tells LAMMPS that this fix advances simulation time
+    dynamic_group_allow = 0;  // we don't allow dynamic groups for now
+
     // Check for multiple MPI processes - not currently supported
     if (comm->nprocs > 1) {
         error->all(FLERR, "fix metatomic does not support multiple MPI processes yet");
@@ -82,6 +85,8 @@ FixMetatomic::FixMetatomic(LAMMPS *lmp, int narg, char **arg): Fix(lmp, narg, ar
 
     bool types_are_set = false;
     this->model_path = arg[3];
+    this->requested_device = std::nullopt;
+    this->extensions_directory = std::nullopt;
     std::vector<int> parsed_types;
 
     int iarg = 4;
@@ -125,7 +130,7 @@ FixMetatomic::FixMetatomic(LAMMPS *lmp, int narg, char **arg): Fix(lmp, narg, ar
                     "specifying the device (e.g. cpu, cuda, mps)"
                 );
             }
-            requested_device = arg[iarg + 1];
+            this->requested_device = std::string(arg[iarg + 1]);
             iarg += 2;
         } else if (strcmp(arg[iarg], "extensions_directory") == 0) {
             if (iarg + 1 >= narg) {
@@ -134,7 +139,7 @@ FixMetatomic::FixMetatomic(LAMMPS *lmp, int narg, char **arg): Fix(lmp, narg, ar
                     "an argument specifying the directory path"
                 );
             }
-            this->extensions_directory = arg[iarg + 1];
+            this->extensions_directory = std::string(arg[iarg + 1]);
             iarg += 2;
         } else {
             error->all(FLERR,
@@ -174,9 +179,6 @@ FixMetatomic::FixMetatomic(LAMMPS *lmp, int narg, char **arg): Fix(lmp, narg, ar
         /*description =*/ ""
     );
     this->mta_data->evaluation_options->outputs.insert("momenta", momenta);
-
-    time_integrate = 1;  // this tells LAMMPS that this fix advances simulation time
-    dynamic_group_allow = 0;  // we don't allow dynamic groups for now
 }
 
 FixMetatomic::~FixMetatomic() {
@@ -210,7 +212,11 @@ void FixMetatomic::init() {
         error->all(FLERR, "fix metatomic internal error: type_mapping not initialized");
     }
 
-    mta_data->load_model(this->lmp, this->model_path.c_str(), this->extensions_directory.c_str());
+    mta_data->load_model(
+        this->lmp,
+        this->model_path.c_str(),
+        this->extensions_directory ? this->extensions_directory->c_str() : nullptr
+    );
 
     double model_timestep = mta_data->model->attr("module").toModule().attr("timestep").toTensor().item<double>();
     model_timestep = model_timestep * 1e-3;  // fs to ps (metal units)
@@ -223,7 +229,10 @@ void FixMetatomic::init() {
 
     // Select the device to use based on the model's preference, the user choice
     // and what's available.
-    this->pick_device(mta_data->device, this->requested_device.c_str());
+    this->pick_device(
+        mta_data->device,
+        this->requested_device ? this->requested_device->c_str() : nullptr
+    );
 
     // move all data to the correct device
     mta_data->model->to(mta_data->device);

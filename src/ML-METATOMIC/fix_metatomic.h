@@ -22,6 +22,10 @@ FixStyle(metatomic, FixMetatomic);
 
 #include "fix.h"
 
+#include <string>
+#include <optional>
+#include <memory>
+
 namespace c10 {
     class Device;
     enum class DeviceType: int8_t;
@@ -55,8 +59,8 @@ public:
     double momentum_conversion_factor;    // Conversion factor for momenta
     double dt;                            // Timestep
     std::string model_path;               // Path to ML model file
-    std::string extensions_directory;    // Directory for model extensions
-    std::string requested_device;        // Device to run model on (cpu/cuda/mps)
+    std::optional<std::string> extensions_directory;     // Directory for model extensions
+    std::optional<std::string> requested_device;         // Device to run model on (cpu/cuda/mps)
 
     // Metatomic model data and configuration
     FixMetatomicData* mta_data;
