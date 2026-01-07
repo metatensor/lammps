@@ -109,6 +109,9 @@ public:
         torch::Device device
     ) override;
 
+    void add_masses(metatomic_torch::System& system, double unit_conversion) override;
+    void add_momenta(metatomic_torch::System& system, double unit_conversion) override;
+
     void setup_neighbors_kk(metatomic_torch::System& system, NeighListKokkos<DeviceType>* list);
 
 private:
@@ -117,6 +120,9 @@ private:
 
     // allocations caches for all the NL requested by the model
     std::vector<MetatomicNeighborsDataKokkos> nl_requests_kk_;
+
+    // keep the mapping from metatomic to LAMMPS atom ids as a tensor on device
+    torch::Tensor mta_to_lmp_tensor_;
 };
 
 }    // namespace LAMMPS_NS

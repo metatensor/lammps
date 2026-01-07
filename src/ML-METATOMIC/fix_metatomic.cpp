@@ -385,87 +385,9 @@ void FixMetatomic::initial_integrate(int /*vflag*/) {
         mta_data->device
     );
 
-    // gather masses (per-atom) in a tensor and ship to device
-    auto float_tensor_options = torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU);
-    torch::Tensor masses;
-    if (rmass) {
-        masses = torch::from_blob(
-            rmass,
-            {nall},
-            float_tensor_options.requires_grad(false)
-        ).to(mta_data->device);
-    } else {
-        // need to map from atom type to mass
-        std::vector<double> masses_vector(nall);
-        for (int i=0; i<nall; i++) {
-            masses_vector[i] = mass[type[i]];
-        }
-        masses = torch::from_blob(
-            masses_vector.data(),
-            {nall},
-            float_tensor_options.requires_grad(false)
-        ).to(mta_data->device);
-    }
-
-    auto label_tensor_options = torch::TensorOptions().dtype(torch::kInt32).device(mta_data->device);
-    auto samples_values = torch::column_stack({
-        torch::zeros(nall, label_tensor_options).unsqueeze(1),
-        torch::arange(nall, label_tensor_options).unsqueeze(1)
-    });
-    auto samples = torch::make_intrusive<metatensor_torch::LabelsHolder>(
-        std::vector<std::string>{"system","atom"}, samples_values
-    );
-    // add masses to system
-    {
-        auto keys = metatensor_torch::LabelsHolder::single()->to(mta_data->device);
-        auto properties = metatensor_torch::LabelsHolder::single()->to(mta_data->device);
-        auto block = torch::make_intrusive<metatensor_torch::TensorBlockHolder>(
-            masses.to(torch::TensorOptions().dtype(dtype)).unsqueeze(-1),  // add property dimension
-            samples,
-            std::vector<metatensor_torch::Labels>{},
-            properties
-        );
-        auto tensor = torch::make_intrusive<metatensor_torch::TensorMapHolder>(
-            keys,
-            std::vector<metatensor_torch::TensorBlock>{block}
-        );
-        system->add_data("masses", tensor, /*override=*/true);
-    }
-
-    // add momenta to the system
-    {
-        // gather velocities in a tensor and ship to device
-        auto velocities = torch::from_blob(
-            // atom->v contains "real" and then ghost atoms, in that order
-            *v, {nall, 3},
-            float_tensor_options.requires_grad(false)
-        ).to(mta_data->device);
-
-        auto momenta = masses.unsqueeze(1) * velocities * this->momentum_conversion_factor;
-
-        // Create TensorBlock for momenta to pass to the ML model
-        auto keys = metatensor_torch::LabelsHolder::single()->to(mta_data->device);
-        auto values = momenta.unsqueeze(-1); // add property dimension
-
-        // define components
-        auto component_values = torch::arange(3, label_tensor_options).unsqueeze(1);
-        auto components = torch::make_intrusive<metatensor_torch::LabelsHolder>(
-            std::vector<std::string>{"xyz"}, component_values
-        );
-
-        auto properties = metatensor_torch::LabelsHolder::single()->to(mta_data->device);
-        auto block = torch::make_intrusive<metatensor_torch::TensorBlockHolder>(
-            values.to(torch::TensorOptions().dtype(dtype)),
-            samples,
-            std::vector<metatensor_torch::Labels>{components},
-            properties
-        );
-        auto tensor = torch::make_intrusive<metatensor_torch::TensorMapHolder>(
-            keys,
-            std::vector<metatensor_torch::TensorBlock>{block}
-        );
-        system->add_data("momenta", tensor, /*override=*/true);
-    }
+    // add the required additional inputs
+    this->system_adaptor->add_masses(system, 1.0);
+    this->system_adaptor->add_momenta(system, this->momentum_conversion_factor);
 
     // Configure selected atoms for evaluation
     // Only run the calculation for atoms in the current group
@@ -539,18 +461,22 @@ void FixMetatomic::initial_integrate(int /*vflag*/) {
     }
 
     // Apply ML predictions to LAMMPS atoms
+    auto positions_accessor = positions.accessor<double, 2>();
+    auto momenta_accessor = momenta.accessor<double, 2>();
     for (int i = 0; i < nlocal; i++) {
         if (mask[i] & groupbit) {
+            double m_i = rmass ? rmass[i] : mass[type[i]];
+
             // Update positions with ML predictions
-            x[i][0] = positions[i][0].item<double>();
-            x[i][1] = positions[i][1].item<double>();
-            x[i][2] = positions[i][2].item<double>();
+            x[i][0] = positions_accessor[i][0];
+            x[i][1] = positions_accessor[i][1];
+            x[i][2] = positions_accessor[i][2];
 
             // Update velocities from predicted momenta
             // Convert momenta back to velocities: v = p / m
-            v[i][0] = momenta[i][0].item<double>() / masses[i].item<double>();
-            v[i][1] = momenta[i][1].item<double>() / masses[i].item<double>();
-            v[i][2] = momenta[i][2].item<double>() / masses[i].item<double>();
+            v[i][0] = momenta_accessor[i][0] / m_i;
+            v[i][1] = momenta_accessor[i][1] / m_i;
+            v[i][2] = momenta_accessor[i][2] / m_i;
         }
     }
 

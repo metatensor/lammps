@@ -181,87 +181,9 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/) {
         mta_data->device
     );
 
-    // Gather masses in a tensor - create directly on device
-    auto float_tensor_options = torch::TensorOptions().dtype(torch::kFloat64).device(mta_data->device);
-    torch::Tensor masses;
-    if (rmass.data()) {
-        // Per-atom masses: create tensor directly from device pointer
-        masses = torch::from_blob(
-            rmass.data(), {nlocal},
-            float_tensor_options.requires_grad(false)
-        ).clone();
-    } else {
-        // Type-based masses: map from atom type to mass on device
-        masses = torch::empty({nlocal}, float_tensor_options);
-        auto masses_kk = UnmanagedView<double*, DeviceType>(
-            masses.data_ptr<double>(), nlocal
-        );
-        Kokkos::parallel_for(nlocal,
-            KOKKOS_LAMBDA(int i) { masses_kk[i] = mass[type[i]]; }
-        );
-    }
-
-    auto label_tensor_options = torch::TensorOptions().dtype(torch::kInt32).device(mta_data->device);
-    auto samples_values = torch::column_stack({
-        torch::zeros(nlocal, label_tensor_options).unsqueeze(1),
-        torch::arange(nlocal, label_tensor_options).unsqueeze(1)
-    });
-    auto samples = torch::make_intrusive<metatensor_torch::LabelsHolder>(
-        std::vector<std::string>{"system","atom"}, samples_values
-    );
-
-    // Add masses to system
-    {
-        auto keys = metatensor_torch::LabelsHolder::single()->to(mta_data->device);
-        auto properties = metatensor_torch::LabelsHolder::single()->to(mta_data->device);
-        auto block = torch::make_intrusive<metatensor_torch::TensorBlockHolder>(
-            masses.to(torch::TensorOptions().dtype(dtype)).unsqueeze(-1),
-            samples,
-            std::vector<metatensor_torch::Labels>{},
-            properties
-        );
-        auto tensor = torch::make_intrusive<metatensor_torch::TensorMapHolder>(
-            keys,
-            std::vector<metatensor_torch::TensorBlock>{block}
-        );
-        system->add_data("masses", tensor, /*override=*/true);
-    }
-
-    // Add momenta to the system
-    {
-        // Create velocities tensor directly from device pointer (no host transfer)
-        auto velocities = torch::from_blob(
-            v.data(), {nlocal, 3},
-            float_tensor_options.requires_grad(false)
-        ).clone();
-
-        // Compute momenta = mass * velocity with unit conversion
-        // Unit conversion factor for metal units (see fix_metatomic.cpp for details)
-        auto momenta = masses.unsqueeze(1) * velocities * this->momentum_conversion_factor;
-
-        // Create TensorBlock for momenta
-        auto keys = metatensor_torch::LabelsHolder::single()->to(mta_data->device);
-        auto values = momenta.unsqueeze(-1); // add property dimension
-
-        // Define components
-        auto component_values = torch::arange(3, label_tensor_options).unsqueeze(1);
-        metatensor_torch::Labels components = torch::make_intrusive<metatensor_torch::LabelsHolder>(
-            std::vector<std::string>{"xyz"}, component_values
-        );
-
-        auto properties = metatensor_torch::LabelsHolder::single()->to(mta_data->device);
-        auto block = torch::make_intrusive<metatensor_torch::TensorBlockHolder>(
-            values.to(torch::TensorOptions().dtype(dtype)),
-            samples,
-            std::vector<metatensor_torch::Labels>{components},
-            properties
-        );
-        auto tensor = torch::make_intrusive<metatensor_torch::TensorMapHolder>(
-            keys,
-            std::vector<metatensor_torch::TensorBlock>{block}
-        );
-        system->add_data("momenta", tensor, /*override=*/true);
-    }
+    // add the required additional inputs
+    this->system_adaptor->add_masses(system, 1.0);
+    this->system_adaptor->add_momenta(system, this->momentum_conversion_factor);
 
     // Configure selected atoms for evaluation
     // Only run the calculation for atoms in the current domain (exclude ghost atoms)
@@ -418,10 +340,10 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/) {
     double com_vel_new_z_sum = reduce_vel_component(2);
 
     // Normalize to get COM positions and velocities (if mass > 0)
-    std::array<double,3> com_old;
-    std::array<double,3> com_velocity_old;
-    std::array<double,3> com_new;
-    std::array<double,3> com_velocity_new;
+    std::array<double, 3> com_old;
+    std::array<double, 3> com_velocity_old;
+    std::array<double, 3> com_new;
+    std::array<double, 3> com_velocity_new;
 
     if (total_mass > 0.0) {
         com_old[0] = com_old_x_sum / total_mass;
