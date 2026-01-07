@@ -187,24 +187,24 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/) {
     if (rmass.data()) {
         // Per-atom masses: create tensor directly from device pointer
         masses = torch::from_blob(
-            rmass.data(), {nall},
+            rmass.data(), {nlocal},
             float_tensor_options.requires_grad(false)
         ).clone();
     } else {
         // Type-based masses: map from atom type to mass on device
-        masses = torch::empty({nall}, float_tensor_options);
+        masses = torch::empty({nlocal}, float_tensor_options);
         auto masses_kk = UnmanagedView<double*, DeviceType>(
-            masses.data_ptr<double>(), nall
+            masses.data_ptr<double>(), nlocal
         );
-        Kokkos::parallel_for(nall,
+        Kokkos::parallel_for(nlocal,
             KOKKOS_LAMBDA(int i) { masses_kk[i] = mass[type[i]]; }
         );
     }
 
     auto label_tensor_options = torch::TensorOptions().dtype(torch::kInt32).device(mta_data->device);
     auto samples_values = torch::column_stack({
-        torch::zeros(nall, label_tensor_options).unsqueeze(1),
-        torch::arange(nall, label_tensor_options).unsqueeze(1)
+        torch::zeros(nlocal, label_tensor_options).unsqueeze(1),
+        torch::arange(nlocal, label_tensor_options).unsqueeze(1)
     });
     auto samples = torch::make_intrusive<metatensor_torch::LabelsHolder>(
         std::vector<std::string>{"system","atom"}, samples_values
@@ -231,7 +231,7 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/) {
     {
         // Create velocities tensor directly from device pointer (no host transfer)
         auto velocities = torch::from_blob(
-            v.data(), {nall, 3},
+            v.data(), {nlocal, 3},
             float_tensor_options.requires_grad(false)
         ).clone();
 
@@ -269,7 +269,7 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/) {
     mta_data->selected_atoms_values.index_put_({torch::indexing::Slice(), 0}, 0);
     int64_t idx = 0;
     for (int i = 0; i < nlocal; i++) {
-        if (mask[i] & groupbit) {
+        if (atomKK->mask[i] & groupbit) {
             mta_data->selected_atoms_values.index_put_({idx, 1}, i);
             idx++;
         }
@@ -326,8 +326,8 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/) {
         masses_kk = rmass;
     } else {
         // Create a per-atom mass array from type-based masses
-        masses_kk = typename AT::t_kkfloat_1d("fix_metatomic:masses", nall);
-        Kokkos::parallel_for(nall,
+        masses_kk = typename AT::t_kkfloat_1d("fix_metatomic:masses", nlocal);
+        Kokkos::parallel_for(nlocal,
             KOKKOS_LAMBDA(int i) { masses_kk[i] = mass[type[i]]; }
         );
     }
