@@ -157,11 +157,31 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/) {
     atomKK->modified(execution_space, datamask_modify);
 
     int nlocal = atomKK->nlocal;
-    int nghost = atomKK->nghost;
-    int nall = nlocal + nghost;
     if (igroup == atomKK->firstgroup) {
         nlocal = atomKK->nfirst;
     }
+
+    // Apply velocity corrections from forces added after post_force
+    // This handles stochastic forces from Langevin thermostats by applying only the
+    // incremental force (f_current - f_snapshot) to velocities. The remaining half-step
+    // is done in final_integrate(); this is the first O in an OBABO integrator.
+    auto f_pre_kk = this->f_pre_kk;
+    double dtf = 0.5 * update->dt * force->ftm2v;
+    bool use_rmass = rmass.data() != nullptr;
+    Kokkos::parallel_for(
+        nlocal,
+        KOKKOS_LAMBDA(int i) {
+            if (mask[i] & groupbit) {
+                double mass_i = use_rmass ? rmass[i] : mass[type[i]];
+                double dtfm = dtf / mass_i;
+
+                // Apply only the incremental force (f - f_pre) to velocities
+                v(i, 0) += (f(i, 0) - f_pre_kk(i, 0)) * dtfm;
+                v(i, 1) += (f(i, 1) - f_pre_kk(i, 1)) * dtfm;
+                v(i, 2) += (f(i, 2) - f_pre_kk(i, 2)) * dtfm;
+            }
+        }
+    );
 
     // Determine dtype for the model
     auto dtype = torch::kFloat64;
@@ -172,6 +192,10 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/) {
     } else {
         error->all(FLERR, "the model requested an unsupported dtype '{}'", mta_data->capabilities->dtype());
     }
+
+    // The v (and x) data is about to be read by torch to create the metatomic System,
+    // we need to synchronize to make sure kokkos kernels finished their execution
+    Kokkos::fence();
 
     // Transform from LAMMPS to metatomic System using Kokkos adaptor
     auto system = this->system_adaptor->system_from_lmp(
@@ -230,6 +254,12 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/) {
     // Convert momenta back from model units to LAMMPS velocity units
     momenta = momenta / this->momentum_conversion_factor;
     momenta = momenta.contiguous();
+
+    // The torch data is about to be read by kokkos to update the LAMMPS variables,
+    // we need to synchronize to make sure the torch operations finished their execution
+    if (mta_data->device.type() == torch::kCUDA) {
+        torch::cuda::synchronize();
+    }
 
     // Wrap torch tensors with UnmanagedView for device access
     auto positions_kk = UnmanagedView<double**, DeviceType>(
@@ -430,7 +460,8 @@ template<class DeviceType>
 void FixMetatomicKokkos<DeviceType>::final_integrate() {
     // Apply velocity corrections from forces added after post_force
     // This handles stochastic forces from Langevin thermostats by applying only
-    // the incremental force (f_current - f_snapshot) to velocities
+    // the incremental force (f_current - f_snapshot) to velocities. The first half-step
+    // is done in initial_integrate(); this is the second O in an OBABO integrator.
 
     auto v = atomKK->k_v.template view<DeviceType>();
     auto f = atomKK->k_f.template view<DeviceType>();
@@ -451,7 +482,7 @@ void FixMetatomicKokkos<DeviceType>::final_integrate() {
         nlocal = atomKK->nfirst;
     }
 
-    double dtf = update->dt * force->ftm2v;
+    double dtf = 0.5 * update->dt * force->ftm2v;
     bool use_rmass = rmass.data() != nullptr;
 
     // Apply force corrections using Kokkos parallel operation

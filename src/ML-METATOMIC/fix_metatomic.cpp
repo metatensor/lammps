@@ -372,17 +372,33 @@ void FixMetatomic::initial_integrate(int /*vflag*/) {
 
     double** x = atom->x;
     double** v = atom->v;
+    double** f = atom->f;
     double* rmass = atom->rmass;
 
     int nlocal = atom->nlocal;
-    int nghost = atom->nghost;
-    int nall = nlocal + nghost;
 
     double *mass = atom->mass;
     int *type = atom->type;
     int *mask = atom->mask;
     if (igroup == atom->firstgroup) {
         nlocal = atom->nfirst;
+    }
+
+    // Apply velocity corrections from forces added after post_force
+    // This handles stochastic forces from Langevin thermostats by applying only the
+    // incremental force (f_current - f_snapshot) to velocities. The remaining half-step
+    // is done in final_integrate(); this is the first O in an OBABO integrator.
+    double dtf = 0.5 * update->dt * force->ftm2v;
+    double m_i;
+    for (int i = 0; i < nlocal; i++) {
+        if (mask[i] & groupbit) {
+            // Apply only the incremental force (f - f_pre) to velocities
+            // rmass is per-atom mass (if used), otherwise use type-based mass
+            m_i = rmass ? rmass[i] : mass[type[i]];
+            v[i][0] += (f[i][0] - f_pre[i][0]) * dtf / m_i;
+            v[i][1] += (f[i][1] - f_pre[i][1]) * dtf / m_i;
+            v[i][2] += (f[i][2] - f_pre[i][2]) * dtf / m_i;
+        }
     }
 
     auto dtype = torch::kFloat64;
@@ -575,9 +591,10 @@ void FixMetatomic::final_integrate() {
     //   correction
     //
     // This ensures Langevin forces properly affect the dynamics while allowing
-    // the ML model to handle the deterministic evolution
+    // the ML model to handle the deterministic evolution. The first half-step
+    // is done in initial_integrate(); this is the second O in an OBABO integrator.
 
-    double dtf = update->dt * force->ftm2v;
+    double dtf = 0.5 * update->dt * force->ftm2v;
 
     double** v = atom->v;
     double** f = atom->f;
