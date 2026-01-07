@@ -3,8 +3,6 @@
 # cf https://github.com/lammps/lammps/pull/4412
 package kokkos newton on neigh half
 
-# comm_modify     cutoff 17.0
-
 units metal
 atom_style atomic/kk
 boundary p p p
@@ -18,12 +16,13 @@ mass 1 26.9815386
 
 velocity all create 800.0 12345 mom yes rot yes dist gaussian
 
-pair_style metatomic/kk flashmd-energy-model.pt
-pair_coeff * * 13
+# pair_style metatomic/kk flashmd-energy-model.pt
+# pair_coeff * * 13
 
 timestep 0.016
 
 fix 0 all metatomic/kk flashmd-dynamics-model.pt types 13
+# fix 1 all langevin 700.0 700.0 0.1 12345
 
 thermo 10
 thermo_style custom step temp pe ke etotal

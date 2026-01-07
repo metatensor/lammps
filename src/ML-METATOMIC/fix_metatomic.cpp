@@ -291,6 +291,17 @@ void FixMetatomic::init() {
     auto request = neighbor->add_request(this, NeighConst::REQ_FULL | NeighConst::REQ_GHOST);
     request->set_cutoff(mta_data->max_cutoff);
 
+    auto mincut = mta_data->max_cutoff + neighbor->skin;
+    if (comm->get_comm_cutoff() < mincut) {
+        if (comm->me == 0) {
+            error->warning(FLERR,
+                "Increasing communication cutoff to {:.8} for fix metatomic",
+                mincut
+            );
+        }
+        comm->cutghostuser = mincut;
+    }
+
     // Translate from the metatomic neighbor lists requests to LAMMPS neighbor
     // lists requests.
     auto requested_nl = mta_data->model->run_method("requested_neighbor_lists");
