@@ -458,11 +458,19 @@ void FixMetatomic::initial_integrate(int /*vflag*/) {
     auto positions_map = result.at("positions").toCustomClass<metatensor_torch::TensorMapHolder>();
     auto positions_block = metatensor_torch::TensorMapHolder::block_by_id(positions_map, 0);
     auto positions = positions_block->values().squeeze(-1).to(torch::kCPU).to(torch::kFloat64);
+    auto positions_samples = positions_block->samples()->values().to(torch::kCPU).contiguous();
+    assert(positions_block->samples()->size() == 2);
+    assert(positions_block->samples()->names()[0] == "system");
+    assert(positions_block->samples()->names()[1] == "atom");
 
     // Extract predicted momenta
     auto momenta_map = result.at("momenta").toCustomClass<metatensor_torch::TensorMapHolder>();
     auto momenta_block = metatensor_torch::TensorMapHolder::block_by_id(momenta_map, 0);
     auto momenta = momenta_block->values().squeeze(-1).to(torch::kCPU).to(torch::kFloat64);
+
+    // we use the positions samples to map back to LAMMPS atoms, so we need to
+    // check that the samples are the same for momenta
+    assert(*momenta_block->samples() == *positions_block->samples());
 
     // Convert momenta back from model units to LAMMPS velocity units
     // This reverses the unit conversion applied before the model call
@@ -496,20 +504,23 @@ void FixMetatomic::initial_integrate(int /*vflag*/) {
     // Apply ML predictions to LAMMPS atoms
     auto positions_accessor = positions.accessor<double, 2>();
     auto momenta_accessor = momenta.accessor<double, 2>();
-    for (int i = 0; i < nlocal; i++) {
-        if (mask[i] & groupbit) {
-            double m_i = rmass ? rmass[i] : mass[type[i]];
+    auto positions_samples_accessor = positions_samples.accessor<int32_t, 2>();
+    auto& mta_to_lmp = this->system_adaptor->mta_to_lmp;
+    for (int64_t i = 0; i < positions.size(0); i++) {
+        auto atom_i = mta_to_lmp[positions_samples_accessor[i][1]];
+        assert(atom_i < nlocal);
+        if (mask[atom_i] & groupbit) {
+            double m_i = rmass ? rmass[atom_i] : mass[type[atom_i]];
 
             // Update positions with ML predictions
-            x[i][0] = positions_accessor[i][0];
-            x[i][1] = positions_accessor[i][1];
-            x[i][2] = positions_accessor[i][2];
+            x[atom_i][0] = positions_accessor[i][0];
+            x[atom_i][1] = positions_accessor[i][1];
+            x[atom_i][2] = positions_accessor[i][2];
 
             // Update velocities from predicted momenta
-            // Convert momenta back to velocities: v = p / m
-            v[i][0] = momenta_accessor[i][0] / m_i;
-            v[i][1] = momenta_accessor[i][1] / m_i;
-            v[i][2] = momenta_accessor[i][2] / m_i;
+            v[atom_i][0] = momenta_accessor[i][0] / m_i;
+            v[atom_i][1] = momenta_accessor[i][1] / m_i;
+            v[atom_i][2] = momenta_accessor[i][2] / m_i;
         }
     }
 

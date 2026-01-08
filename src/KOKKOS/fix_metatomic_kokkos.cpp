@@ -254,11 +254,20 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/) {
     auto positions_map = result.at("positions").toCustomClass<metatensor_torch::TensorMapHolder>();
     auto positions_block = metatensor_torch::TensorMapHolder::block_by_id(positions_map, 0);
     auto positions = positions_block->values().squeeze(-1).to(mta_data->device).to(torch::kFloat64).contiguous();
+    auto positions_samples = positions_block->samples()->values().contiguous();
+    assert(positions_block->samples()->size() == 2);
+    assert(positions_block->samples()->names()[0] == "system");
+    assert(positions_block->samples()->names()[1] == "atom");
+
 
     // Extract predicted momenta (keep on device)
     auto momenta_map = result.at("momenta").toCustomClass<metatensor_torch::TensorMapHolder>();
     auto momenta_block = metatensor_torch::TensorMapHolder::block_by_id(momenta_map, 0);
     auto momenta = momenta_block->values().squeeze(-1).to(mta_data->device).to(torch::kFloat64);
+
+    // we use the positions samples to map back to LAMMPS atoms, so we need to
+    // check that the samples are the same for momenta
+    assert(*momenta_block->samples() == *positions_block->samples());
 
     // Convert momenta back from model units to LAMMPS velocity units
     momenta = momenta / this->momentum_conversion_factor;
@@ -275,9 +284,22 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/) {
         positions.template data_ptr<double>(),
         positions.size(0), 3
     );
+    auto positions_samples_kk = UnmanagedView<int32_t**, DeviceType>(
+        positions_samples.data_ptr<int32_t>(),
+        positions_samples.size(0),
+        positions_samples.size(1)
+    );
+
     auto momenta_kk = UnmanagedView<double**, DeviceType>(
         momenta.template data_ptr<double>(),
         momenta.size(0), 3
+    );
+
+    auto system_adaptor_kk = dynamic_cast<MetatomicSystemAdaptorKokkos<DeviceType>*>(this->system_adaptor.get());
+    assert(system_adaptor_kk != nullptr);
+    auto mta_to_lmp_kk = UnmanagedView<int32_t*, DeviceType>(
+        system_adaptor_kk->mta_to_lmp_tensor.template data_ptr<int32_t>(),
+        system_adaptor_kk->mta_to_lmp_tensor.size(0)
     );
 
     // Prepare masses view for device access
@@ -349,25 +371,25 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/) {
     double com_vel_old_y_sum = reduce_vel_component(1);
     double com_vel_old_z_sum = reduce_vel_component(2);
 
-    // --- Core update ---
     Kokkos::parallel_for(
-        nlocal,
+        positions.size(0),
         KOKKOS_LAMBDA(int i) {
-            if (mask[i] & groupbit) {
+            auto atom_i = mta_to_lmp_kk[positions_samples_kk(i, 1)];
+            assert(atom_i < nlocal);
+            if (mask[atom_i] & groupbit) {
                 // Update positions with ML predictions
-                x(i, 0) = positions_kk(i, 0);
-                x(i, 1) = positions_kk(i, 1);
-                x(i, 2) = positions_kk(i, 2);
+                x(atom_i, 0) = positions_kk(i, 0);
+                x(atom_i, 1) = positions_kk(i, 1);
+                x(atom_i, 2) = positions_kk(i, 2);
 
-                // Update velocities from predicted momenta: v = p / m
-                double mass_i = masses_kk[i];
-                v(i, 0) = momenta_kk(i, 0) / mass_i;
-                v(i, 1) = momenta_kk(i, 1) / mass_i;
-                v(i, 2) = momenta_kk(i, 2) / mass_i;
+                // Update velocities from predicted momenta
+                double mass_i = masses_kk[atom_i];
+                v(atom_i, 0) = momenta_kk(i, 0) / mass_i;
+                v(atom_i, 1) = momenta_kk(i, 1) / mass_i;
+                v(atom_i, 2) = momenta_kk(i, 2) / mass_i;
             }
         }
     );
-    // --- end core update ---
 
     // Compute mass-weighted sums after update
     double com_new_x_sum = reduce_pos_component(0);

@@ -114,15 +114,15 @@ public:
 
     void setup_neighbors_kk(metatomic_torch::System& system, NeighListKokkos<DeviceType>* list);
 
+    // keep the mapping from metatomic to LAMMPS atom ids as a tensor on device
+    torch::Tensor mta_to_lmp_tensor;
+
 private:
     /// Torch device corresponding to the kokkos `DeviceType`
     torch::Device device_;
 
     // allocations caches for all the NL requested by the model
     std::vector<MetatomicNeighborsDataKokkos> nl_requests_kk_;
-
-    // keep the mapping from metatomic to LAMMPS atom ids as a tensor on device
-    torch::Tensor mta_to_lmp_tensor_;
 };
 
 }    // namespace LAMMPS_NS

@@ -445,15 +445,15 @@ metatomic_torch::System MetatomicSystemAdaptorKokkos<DeviceType>::system_from_lm
     // make sure to sync the updated tags to host
     atomKK->sync(ExecutionSpaceFromDevice<LMPHostType>::space, TAG_MASK);
     this->guess_periodic_ghosts();
-    mta_to_lmp_tensor_ = torch::from_blob(
+    this->mta_to_lmp_tensor = torch::from_blob(
         mta_to_lmp.data(),
         {static_cast<int64_t>(mta_to_lmp.size())},
         torch::TensorOptions().dtype(torch::kInt).device(torch::kCPU)
     ).to(this->device_);
 
     // Only keep the atoms which are not periodic images of other atoms
-    this->atomic_types_ = this->atomic_types_.index_select(0, mta_to_lmp_tensor_);
-    this->positions = this->positions.index_select(0, mta_to_lmp_tensor_);
+    this->atomic_types_ = this->atomic_types_.index_select(0, this->mta_to_lmp_tensor);
+    this->positions = this->positions.index_select(0, this->mta_to_lmp_tensor);
 
     this->positions.set_requires_grad(options_.requires_grad);
 
@@ -514,7 +514,7 @@ void MetatomicSystemAdaptorKokkos<DeviceType>::add_masses(metatomic_torch::Syste
         });
     }
 
-    masses = masses.index_select(0, mta_to_lmp_tensor_);
+    masses = masses.index_select(0, this->mta_to_lmp_tensor);
     masses = masses * unit_conversion;
 
     auto keys = metatensor_torch::LabelsHolder::single()->to(device);
@@ -573,7 +573,7 @@ void MetatomicSystemAdaptorKokkos<DeviceType>::add_momenta(metatomic_torch::Syst
         momenta_kk(i, 2) = m_i * v(i, 2);
     });
 
-    momenta = momenta.index_select(0, mta_to_lmp_tensor_);
+    momenta = momenta.index_select(0, this->mta_to_lmp_tensor);
     momenta = momenta * unit_conversion;
 
     auto keys = metatensor_torch::LabelsHolder::single()->to(device);
