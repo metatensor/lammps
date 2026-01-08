@@ -210,16 +210,25 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/) {
     this->system_adaptor->add_momenta(system, this->momentum_conversion_factor);
 
     // Configure selected atoms for evaluation
-    // Only run the calculation for atoms in the current domain (exclude ghost atoms)
+    // Only run the calculation for atoms in the current group
     mta_data->selected_atoms_values.resize_({group->count(igroup), 2});
-    mta_data->selected_atoms_values.index_put_({torch::indexing::Slice(), 0}, 0);
-    int64_t idx = 0;
-    for (int i = 0; i < nlocal; i++) {
-        if (atomKK->mask[i] & groupbit) {
-            mta_data->selected_atoms_values.index_put_({idx, 1}, i);
-            idx++;
+    auto selected_atoms_kk = UnmanagedView<int32_t**, DeviceType>(
+        mta_data->selected_atoms_values.data_ptr<int32_t>(),
+        mta_data->selected_atoms_values.size(0),
+        2
+    );
+    auto d_atom_i = Kokkos::View<int32_t, LMPDeviceType>("atom_i");
+    Kokkos::deep_copy(d_atom_i, 0);
+    Kokkos::parallel_for(
+        nlocal,
+        KOKKOS_LAMBDA(size_t i) {
+            if (mask[i] & groupbit) {
+                selected_atoms_kk(i, 0) = 0; // system index
+                auto atom_i = Kokkos::atomic_fetch_add(&d_atom_i(), 1);
+                selected_atoms_kk(i, 1) = atom_i;
+            }
         }
-    }
+    );
 
     auto selected_atoms = torch::make_intrusive<metatensor_torch::LabelsHolder>(
         std::vector<std::string>{"system", "atom"}, mta_data->selected_atoms_values
