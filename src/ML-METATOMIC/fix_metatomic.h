@@ -67,12 +67,6 @@ public:
     NeighList *mta_list;
     int mta_list_reqid;
 
-    // Force snapshot for Langevin compatibility
-    // Stores forces at post_force() time to isolate stochastic contributions
-    double **f_pre = nullptr;
-    void ensure_capacity();  // Ensures f_pre has sufficient capacity
-    int nmax = 0;            // Current allocated size of f_pre
-
     // Mapping from LAMMPS atom types to metatomic model types
     int32_t *type_mapping;
 

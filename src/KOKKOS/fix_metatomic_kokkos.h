@@ -46,9 +46,6 @@ private:
 
    // Kokkos view for type mapping
    Kokkos::View<int32_t*, Kokkos::LayoutRight, DeviceType> type_mapping_kk;
-
-   // Kokkos view for force snapshot
-   typename AT::t_kkfloat_2d f_pre_kk;
 };
 
 }    // namespace LAMMPS_NS

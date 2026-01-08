@@ -57,7 +57,7 @@ FixMetatomicKokkos<DeviceType>::FixMetatomicKokkos(LAMMPS *lmp, int narg, char *
   execution_space = ExecutionSpaceFromDevice<DeviceType>::space;
 
   datamask_read = X_MASK | V_MASK | F_MASK | MASK_MASK | RMASS_MASK | TYPE_MASK;
-  datamask_modify = X_MASK | V_MASK;
+  datamask_modify = X_MASK | V_MASK | F_MASK;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -107,9 +107,6 @@ void FixMetatomicKokkos<DeviceType>::init() {
     // Sync mass data to device
     atomKK->k_mass.modify_host();
     atomKK->k_mass.sync<DeviceType>();
-
-    // Allocate Kokkos view for force snapshot
-    f_pre_kk = typename AT::t_kkfloat_2d("fix_metatomic:f_pre", atom->nmax, 3);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -161,11 +158,11 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/) {
         nlocal = atomKK->nfirst;
     }
 
-    // Apply velocity corrections from forces added after post_force
-    // This handles stochastic forces from Langevin thermostats by applying only the
-    // incremental force (f_current - f_snapshot) to velocities. The remaining half-step
-    // is done in final_integrate(); this is the first O in an OBABO integrator.
-    auto f_pre_kk = this->f_pre_kk;
+    // Apply velocity corrections from forces added after `post_force`.
+    //
+    // This handles stochastic forces from Langevin thermostats by applying only
+    // the incremental force to velocities. The remaining half-step is done in
+    // final_integrate(); this is the first O in an OBABO integrator.
     double dtf = 0.5 * update->dt * force->ftm2v;
     bool use_rmass = rmass.data() != nullptr;
     Kokkos::parallel_for(
@@ -175,10 +172,9 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/) {
                 double mass_i = use_rmass ? rmass[i] : mass[type[i]];
                 double dtfm = dtf / mass_i;
 
-                // Apply only the incremental force (f - f_pre) to velocities
-                v(i, 0) += (f(i, 0) - f_pre_kk(i, 0)) * dtfm;
-                v(i, 1) += (f(i, 1) - f_pre_kk(i, 1)) * dtfm;
-                v(i, 2) += (f(i, 2) - f_pre_kk(i, 2)) * dtfm;
+                v(i, 0) += f(i, 0) * dtfm;
+                v(i, 1) += f(i, 1) * dtfm;
+                v(i, 2) += f(i, 2) * dtfm;
             }
         }
     );
@@ -461,38 +457,46 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/) {
 
 template<class DeviceType>
 void FixMetatomicKokkos<DeviceType>::post_force(int /*vflag*/) {
-    // Here, we take a snapshot of the forces for compatibility with fixes which
-    // add forces at post_force() time, e.g. fix langevin, fix plumed, etc. This
-    // allows us to isolate forces added after this point and add them during
-    // our final_integrate() step.
+    // Set the forces that comes from pair_style, bond_style, etc. to zero.
+    //
+    // This way we can isolate any forces that are added after this point (e.g.
+    // Langevin thermostat forces) and add them during final_integrate().
     //
     // Crucially, this means that fix metatomic needs to be the first fix in the
     // post_force() sequence, i.e., the user must have it before any other fix
     // that adds forces in the input script.
-
+    atomKK->sync(execution_space, F_MASK | MASK_MASK);
+    atomKK->modified(execution_space, F_MASK);
     auto f = atomKK->k_f.template view<DeviceType>();
-    atomKK->sync(execution_space, F_MASK);
+    auto mask = atomKK->k_mask.template view<DeviceType>();
+
+    auto groupbit = this->groupbit;
 
     int nlocal = atomKK->nlocal;
-    if (igroup == atomKK->firstgroup) nlocal = atomKK->nfirst;
-
-    // Resize force snapshot if needed to accommodate all atoms
-    if (f_pre_kk.extent(0) < (size_t)atom->nmax) {
-        f_pre_kk = typename AT::t_kkfloat_2d("fix_metatomic:f_pre", atom->nmax, 3);
+    if (igroup == atomKK->firstgroup) {
+        nlocal = atomKK->nfirst;
     }
-    auto f_pre_sub = Kokkos::subview(f_pre_kk, std::make_pair(0, nlocal), Kokkos::ALL);
-    auto f_sub = Kokkos::subview(f, std::make_pair(0, nlocal), Kokkos::ALL);
-    Kokkos::deep_copy(f_pre_sub, f_sub);
+
+    Kokkos::parallel_for(
+        nlocal,
+        KOKKOS_LAMBDA(int i) {
+            if (mask[i] & groupbit) {
+                f(i, 0) = 0.0;
+                f(i, 1) = 0.0;
+                f(i, 2) = 0.0;
+            }
+        }
+    );
 }
 
 /* ---------------------------------------------------------------------- */
 
 template<class DeviceType>
 void FixMetatomicKokkos<DeviceType>::final_integrate() {
-    // Apply velocity corrections from forces added after post_force
+    // Apply velocity corrections from forces added after post_force.
     // This handles stochastic forces from Langevin thermostats by applying only
-    // the incremental force (f_current - f_snapshot) to velocities. The first half-step
-    // is done in initial_integrate(); this is the second O in an OBABO integrator.
+    // the incremental force to velocities. The first half-step is done in
+    // initial_integrate(); this is the second O in an OBABO integrator.
 
     auto v = atomKK->k_v.template view<DeviceType>();
     auto f = atomKK->k_f.template view<DeviceType>();
@@ -505,7 +509,6 @@ void FixMetatomicKokkos<DeviceType>::final_integrate() {
     atomKK->sync(execution_space, V_MASK | F_MASK | MASK_MASK | RMASS_MASK | TYPE_MASK);
     atomKK->modified(execution_space, V_MASK);
 
-    auto f_pre_kk = this->f_pre_kk;
     auto groupbit = this->groupbit;
 
     int nlocal = atomKK->nlocal;
@@ -515,9 +518,6 @@ void FixMetatomicKokkos<DeviceType>::final_integrate() {
 
     double dtf = 0.5 * update->dt * force->ftm2v;
     bool use_rmass = rmass.data() != nullptr;
-
-    // Apply force corrections using Kokkos parallel operation
-    // Only atoms in the specified group are updated
     Kokkos::parallel_for(
         nlocal,
         KOKKOS_LAMBDA(int i) {
@@ -525,10 +525,10 @@ void FixMetatomicKokkos<DeviceType>::final_integrate() {
                 double mass_i = use_rmass ? rmass[i] : mass[type[i]];
                 double dtfm = dtf / mass_i;
 
-                // Apply only the incremental force (f - f_pre) to velocities
-                v(i, 0) += (f(i, 0) - f_pre_kk(i, 0)) * dtfm;
-                v(i, 1) += (f(i, 1) - f_pre_kk(i, 1)) * dtfm;
-                v(i, 2) += (f(i, 2) - f_pre_kk(i, 2)) * dtfm;
+                // Apply any force added by other fixes to velocities
+                v(i, 0) += f(i, 0) * dtfm;
+                v(i, 1) += f(i, 1) * dtfm;
+                v(i, 2) += f(i, 2) * dtfm;
             }
         }
     );

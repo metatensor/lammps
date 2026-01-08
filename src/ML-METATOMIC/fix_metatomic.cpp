@@ -392,12 +392,12 @@ void FixMetatomic::initial_integrate(int /*vflag*/) {
     double m_i;
     for (int i = 0; i < nlocal; i++) {
         if (mask[i] & groupbit) {
-            // Apply only the incremental force (f - f_pre) to velocities
+            // Apply any force added by other fixes to velocities
             // rmass is per-atom mass (if used), otherwise use type-based mass
             m_i = rmass ? rmass[i] : mass[type[i]];
-            v[i][0] += (f[i][0] - f_pre[i][0]) * dtf / m_i;
-            v[i][1] += (f[i][1] - f_pre[i][1]) * dtf / m_i;
-            v[i][2] += (f[i][2] - f_pre[i][2]) * dtf / m_i;
+            v[i][0] += f[i][0] * dtf / m_i;
+            v[i][1] += f[i][1] * dtf / m_i;
+            v[i][2] += f[i][2] * dtf / m_i;
         }
     }
 
@@ -563,16 +563,14 @@ void FixMetatomic::initial_integrate(int /*vflag*/) {
 }
 
 void FixMetatomic::post_force(int /*vflag*/) {
-    // Here, we take a snapshot of the forces for compatibility with fixes which
-    // add forces at post_force() time, e.g. fix langevin, fix plumed, etc. This
-    // allows us to isolate forces added after this point and add them during
-    // our final_integrate() step.
-
+    // Set the forces that comes from pair_style, bond_style, etc. to zero.
+    //
+    // This way we can isolate any forces that are added after this point (e.g.
+    // Langevin thermostat forces) and add them during final_integrate().
+    //
     // Crucially, this means that fix metatomic needs to be the first fix in the
     // post_force() sequence, i.e., the user must have it before any other fix
     // that adds forces in the input script.
-
-    this->ensure_capacity();
 
     double **f = atom->f;
     int *mask = atom->mask;
@@ -584,15 +582,16 @@ void FixMetatomic::post_force(int /*vflag*/) {
 
     for (int i = 0; i < nlocal; i++) {
         if (mask[i] & groupbit) {
-            f_pre[i][0] = f[i][0];
-            f_pre[i][1] = f[i][1];
-            f_pre[i][2] = f[i][2];
+            f[i][0] = 0.0;
+            f[i][1] = 0.0;
+            f[i][2] = 0.0;
         }
     }
 }
 
 void FixMetatomic::final_integrate() {
     // Apply velocity corrections from forces that were added after post_force
+    //
     // This handles stochastic forces from Langevin thermostats:
     // - initial_integrate: ML model updates positions and velocities
     // - post_force: we snapshot forces (includes pair, bond, and Langevin
@@ -620,25 +619,11 @@ void FixMetatomic::final_integrate() {
 
     for (int i = 0; i < nlocal; i++) {
         if (mask[i] & groupbit) {
-            // Apply only the incremental force (f - f_pre) to velocities
-            // rmass is per-atom mass (if used), otherwise use type-based mass
+            // Apply any force added by other fixes to velocities
             m_i = rmass ? rmass[i] : mass[type[i]];
-            v[i][0] += (f[i][0] - f_pre[i][0]) * dtf / m_i;
-            v[i][1] += (f[i][1] - f_pre[i][1]) * dtf / m_i;
-            v[i][2] += (f[i][2] - f_pre[i][2]) * dtf / m_i;
+            v[i][0] += f[i][0] * dtf / m_i;
+            v[i][1] += f[i][1] * dtf / m_i;
+            v[i][2] += f[i][2] * dtf / m_i;
         }
-    }
-}
-
-
-void FixMetatomic::ensure_capacity() {
-    // Ensure f_pre array has sufficient capacity for current number of atoms
-    // Reallocate if atom count has grown since last allocation
-    if (atom->nmax > nmax) {
-        this->nmax = atom->nmax;
-        if (f_pre) {
-            memory->destroy(f_pre);
-        }
-        memory->create(f_pre, this->nmax, 3, "fix metatomic::f_pre");
     }
 }
