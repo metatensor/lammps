@@ -108,7 +108,8 @@ template<class DeviceType>
 void MetatomicSystemAdaptorKokkos<DeviceType>::setup_neighbors_kk(metatomic_torch::System& system, NeighListKokkos<DeviceType>* list) {
     auto _ = MetatomicTimer("converting kokkos neighbors list");
 
-    static bool debug_nl = (std::getenv("LAMMPS_METATOMIC_DEBUG_NL") != nullptr);
+    static bool debug_nl_static = (std::getenv("LAMMPS_METATOMIC_DEBUG_NL") != nullptr);
+    bool debug_nl = debug_nl_static;
 
     auto dtype = system->positions().scalar_type();
     auto total_n_atoms = atomKK->nlocal + atomKK->nghost;
