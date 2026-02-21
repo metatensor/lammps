@@ -291,6 +291,8 @@ void MetatomicSystemAdaptor::setup_neighbors(metatomic_torch::System& system, Ne
             int64_t f_cutoff = 0;
             int64_t f_half_self_image = 0;
             int64_t written = 0;
+            int64_t sum_i = 0, sum_j = 0;
+            int64_t n_i_original = 0, n_j_original = 0;
 
             // convert from LAMMPS neighbors list to metatomic format
             nl.samples.clear();
@@ -307,6 +309,10 @@ void MetatomicSystemAdaptor::setup_neighbors(metatomic_torch::System& system, Ne
                     auto atom_j = neighbors[jj] & NEIGHMASK;
                     auto original_atom_j = original_atom_id_[atom_j];
                     auto j_is_original = (atom_j == original_atom_j);
+                    sum_i += atom_i;
+                    sum_j += atom_j;
+                    if (i_is_original) n_i_original++;
+                    if (j_is_original) n_j_original++;
 
                     if (!full_list && original_atom_i > original_atom_j) {
                         // Remove extra pairs if the model requested half-lists
@@ -433,12 +439,14 @@ void MetatomicSystemAdaptor::setup_neighbors(metatomic_torch::System& system, Ne
                     "  nlocal=%d nghost=%d inum=%d gnum=%d\n"
                     "  total_checked=%lld f_half_list=%lld f_both_ghosts=%lld\n"
                     "  f_ghost_orig=%lld f_cutoff=%lld f_half_self_image=%lld\n"
-                    "  written=%lld\n",
+                    "  written=%lld\n"
+                    "  sum_i=%lld sum_j=%lld n_i_original=%lld n_j_original=%lld\n",
                     comm->me, nl.cutoff, full_list ? "true" : "false",
                     atom->nlocal, atom->nghost, list->inum, list->gnum,
                     (long long)total_checked, (long long)f_half_list, (long long)f_both_ghosts,
                     (long long)f_ghost_orig, (long long)f_cutoff, (long long)f_half_self_image,
-                    (long long)written
+                    (long long)written,
+                    (long long)sum_i, (long long)sum_j, (long long)n_i_original, (long long)n_j_original
                 );
             }
         }
