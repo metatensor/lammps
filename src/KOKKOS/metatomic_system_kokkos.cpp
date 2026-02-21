@@ -443,6 +443,13 @@ metatomic_torch::System MetatomicSystemAdaptorKokkos<DeviceType>::system_from_lm
     auto _ = MetatomicTimer("creating System from LAMMPS-kokkos data");
     assert(device == this->device_);
 
+    // Sync atom data to the device execution space. Positions (X_MASK) and
+    // types (TYPE_MASK) are read on-device by the neighbor list kernel and
+    // type mapping. Tags (TAG_MASK) are read on the host by
+    // guess_periodic_ghosts(). Without these syncs, device-side views may
+    // contain stale data from a previous timestep.
+    atomKK->sync(ExecutionSpaceFromDevice<DeviceType>::space, X_MASK | TYPE_MASK);
+
     auto total_n_atoms = atomKK->nlocal + atomKK->nghost;
 
     atomic_types_.resize_({total_n_atoms});
