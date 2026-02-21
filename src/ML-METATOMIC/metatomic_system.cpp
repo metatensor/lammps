@@ -18,10 +18,14 @@
 #include "metatomic_timer.h"
 
 #include "atom.h"
+#include "comm.h"
 #include "domain.h"
 #include "error.h"
 
 #include "neigh_list.h"
+
+#include <cstdio>
+#include <cstdlib>
 
 #include <metatensor/torch.hpp>
 
@@ -268,6 +272,8 @@ void MetatomicSystemAdaptor::setup_neighbors(metatomic_torch::System& system, Ne
     auto dtype = system->positions().scalar_type();
     auto device = system->positions().device();
 
+    static bool debug_nl = (std::getenv("LAMMPS_METATOMIC_DEBUG_NL") != nullptr);
+
     double** x = atom->x;
     auto cell_inv = this->cell_inverse();
 
@@ -277,6 +283,14 @@ void MetatomicSystemAdaptor::setup_neighbors(metatomic_torch::System& system, Ne
 
             auto cutoff2 = nl.cutoff * nl.cutoff;
             auto full_list = nl.options->full_list();
+
+            int64_t total_checked = 0;
+            int64_t f_half_list = 0;
+            int64_t f_both_ghosts = 0;
+            int64_t f_ghost_orig = 0;
+            int64_t f_cutoff = 0;
+            int64_t f_half_self_image = 0;
+            int64_t written = 0;
 
             // convert from LAMMPS neighbors list to metatomic format
             nl.samples.clear();
@@ -289,23 +303,27 @@ void MetatomicSystemAdaptor::setup_neighbors(metatomic_torch::System& system, Ne
 
                 auto neighbors = list->firstneigh[ii];
                 for (int jj=0; jj<list->numneigh[ii]; jj++) {
+                    total_checked++;
                     auto atom_j = neighbors[jj] & NEIGHMASK;
                     auto original_atom_j = original_atom_id_[atom_j];
                     auto j_is_original = (atom_j == original_atom_j);
 
                     if (!full_list && original_atom_i > original_atom_j) {
                         // Remove extra pairs if the model requested half-lists
+                        f_half_list++;
                         continue;
                     }
 
                     if (!i_is_original && !j_is_original) {
                         // both atoms are periodic ghosts, skip the pair
+                        f_both_ghosts++;
                         continue;
                     }
 
                     if (!i_is_original && j_is_original) {
                         // this pair will be accounted for when we will process
                         // atom_j as the central atom
+                        f_ghost_orig++;
                         continue;
                     }
 
@@ -323,6 +341,7 @@ void MetatomicSystemAdaptor::setup_neighbors(metatomic_torch::System& system, Ne
                     if (distance2 > cutoff2) {
                         // LAMMPS neighbors list contains some pairs after the
                         // cutoff, we filter them here
+                        f_cutoff++;
                         continue;
                     }
 
@@ -357,6 +376,7 @@ void MetatomicSystemAdaptor::setup_neighbors(metatomic_torch::System& system, Ne
                             // shifts.
                             if (shift[0] + shift[1] + shift[2] < 0) {
                                 // drop shifts on the negative half-space
+                                f_half_self_image++;
                                 continue;
                             }
 
@@ -376,6 +396,7 @@ void MetatomicSystemAdaptor::setup_neighbors(metatomic_torch::System& system, Ne
                                 //  X X X │ X X X
                                 //  X X X │ X X X
                                 //  X X X │ X X X
+                                f_half_self_image++;
                                 continue;
                             }
                         }
@@ -389,6 +410,7 @@ void MetatomicSystemAdaptor::setup_neighbors(metatomic_torch::System& system, Ne
                         shift[2],
                     };
 
+                    written++;
                     nl.samples.push_back(sample);
                     if (dtype == torch::kFloat64) {
                         nl.distances_f64.push_back(distance);
@@ -403,6 +425,21 @@ void MetatomicSystemAdaptor::setup_neighbors(metatomic_torch::System& system, Ne
                         error->one(FLERR, "invalid dtype, this is a bug");
                     }
                 }
+            }
+
+            if (debug_nl) {
+                fprintf(stderr,
+                    "metatomic-cpu-nl-debug [rank %d] (cutoff=%.4f, full_list=%s):\n"
+                    "  nlocal=%d nghost=%d inum=%d gnum=%d\n"
+                    "  total_checked=%lld f_half_list=%lld f_both_ghosts=%lld\n"
+                    "  f_ghost_orig=%lld f_cutoff=%lld f_half_self_image=%lld\n"
+                    "  written=%lld\n",
+                    comm->me, nl.cutoff, full_list ? "true" : "false",
+                    atom->nlocal, atom->nghost, list->inum, list->gnum,
+                    (long long)total_checked, (long long)f_half_list, (long long)f_both_ghosts,
+                    (long long)f_ghost_orig, (long long)f_cutoff, (long long)f_half_self_image,
+                    (long long)written
+                );
             }
         }
 
