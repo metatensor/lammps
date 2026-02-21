@@ -81,7 +81,7 @@ void MetatomicSystemAdaptorKokkos<DeviceType>::add_nl_request(double cutoff, met
 
 KOKKOS_INLINE_FUNCTION
 Kokkos::Array<int32_t, 3> cell_shifts(
-    Kokkos::View<double**, Kokkos::LayoutRight, LMPDeviceType>& cell_inv,
+    const Kokkos::View<double**, Kokkos::LayoutRight, LMPDeviceType>& cell_inv,
     const double pair_shift[3]
 ) {
     auto shift_a = static_cast<int32_t>(std::round(
