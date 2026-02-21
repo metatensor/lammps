@@ -213,15 +213,15 @@ void MetatomicSystemAdaptorKokkos<DeviceType>::setup_neighbors_kk(metatomic_torc
                     {list->inum + list->gnum, max_number_of_neighbors}
                 ),
                 KOKKOS_LAMBDA(size_t ii, size_t jj) {
-                    if (jj >= d_numneigh[ii]) {
+                    auto atom_i = d_ilist[ii];
+                    if (jj >= d_numneigh[atom_i]) {
                         return;
                     }
                     if (debug_nl) Kokkos::atomic_fetch_add(&d_stats(0), int64_t(1));
 
-                    auto atom_i = d_ilist[ii];
                     auto original_atom_i = d_original_atom_id[atom_i];
                     auto i_is_original = (atom_i == original_atom_i);
-                    auto atom_j = d_neighbors(ii, jj) & NEIGHMASK;
+                    auto atom_j = d_neighbors(atom_i, jj) & NEIGHMASK;
                     auto original_atom_j = d_original_atom_id[atom_j];
                     auto j_is_original = (atom_j == original_atom_j);
 
@@ -357,7 +357,7 @@ void MetatomicSystemAdaptorKokkos<DeviceType>::setup_neighbors_kk(metatomic_torc
             auto h_stats = Kokkos::View<int64_t*, Kokkos::LayoutRight, LMPHostType>("h_nl_stats", 8);
             Kokkos::deep_copy(h_stats, d_stats);
             fprintf(stderr,
-                "metatomic-kk-nl-debug [rank %d] NL debug (cutoff=%.4f, full_list=%s):\n"
+                "metatomic-kk-nl-debug [rank %d] (cutoff=%.4f, full_list=%s):\n"
                 "  nlocal=%d nghost=%d inum=%d gnum=%d maxneighs=%d\n"
                 "  total_checked=%lld f_half_list=%lld f_both_ghosts=%lld\n"
                 "  f_ghost_orig=%lld f_cutoff=%lld f_half_self_image=%lld\n"
