@@ -293,6 +293,7 @@ void MetatomicSystemAdaptor::setup_neighbors(metatomic_torch::System& system, Ne
             int64_t written = 0;
             int64_t sum_i = 0, sum_j = 0;
             int64_t n_i_original = 0, n_j_original = 0;
+            int64_t total_local = 0;
 
             // convert from LAMMPS neighbors list to metatomic format
             nl.samples.clear();
@@ -558,6 +559,18 @@ metatomic_torch::System MetatomicSystemAdaptor::system_from_lmp(
     cell.index_put_({torch::logical_not(pbc)}, torch::tensor({0.0}, tensor_options));
 
     this->guess_periodic_ghosts();
+
+    {
+        static bool debug_nl = (std::getenv("LAMMPS_METATOMIC_DEBUG_NL") != nullptr);
+        if (debug_nl) {
+            int n_atoms_original = 0;
+            for (size_t i = 0; i < original_atom_id_.size(); i++) {
+                if (original_atom_id_[i] == static_cast<int>(i)) n_atoms_original++;
+            }
+            fprintf(stderr, "metatomic-cpu-ghost-debug [rank %d]: total_atoms=%zu n_atoms_original=%d mta_to_lmp_size=%zu\n",
+                comm->me, original_atom_id_.size(), n_atoms_original, mta_to_lmp.size());
+        }
+    }
 
     // Only keep the atoms which are not periodic images of other atoms
     auto mta_to_lmp_tensor = torch::from_blob(

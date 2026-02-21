@@ -501,6 +501,18 @@ metatomic_torch::System MetatomicSystemAdaptorKokkos<DeviceType>::system_from_lm
     // make sure to sync the updated tags to host
     atomKK->sync(ExecutionSpaceFromDevice<LMPHostType>::space, TAG_MASK);
     this->guess_periodic_ghosts();
+
+    {
+        static bool debug_nl = (std::getenv("LAMMPS_METATOMIC_DEBUG_NL") != nullptr);
+        if (debug_nl) {
+            int n_atoms_original = 0;
+            for (size_t i = 0; i < original_atom_id_.size(); i++) {
+                if (original_atom_id_[i] == static_cast<int>(i)) n_atoms_original++;
+            }
+            fprintf(stderr, "metatomic-kk-ghost-debug [rank %d]: total_atoms=%zu n_atoms_original=%d mta_to_lmp_size=%zu\n",
+                comm->me, original_atom_id_.size(), n_atoms_original, mta_to_lmp.size());
+        }
+    }
     this->mta_to_lmp_tensor = torch::from_blob(
         mta_to_lmp.data(),
         {static_cast<int64_t>(mta_to_lmp.size())},
