@@ -227,13 +227,6 @@ void MetatomicSystemAdaptorKokkos<DeviceType>::setup_neighbors_kk(metatomic_torc
                     auto original_atom_j = d_original_atom_id[atom_j];
                     auto j_is_original = (atom_j == original_atom_j);
 
-                    if (debug_nl) {
-                        Kokkos::atomic_fetch_add(&d_stats(8), int64_t(atom_i));
-                        Kokkos::atomic_fetch_add(&d_stats(9), int64_t(atom_j));
-                        if (i_is_original) Kokkos::atomic_fetch_add(&d_stats(10), int64_t(1));
-                        if (j_is_original) Kokkos::atomic_fetch_add(&d_stats(11), int64_t(1));
-                    }
-
                     if (!full_list && original_atom_i > original_atom_j) {
                         // Remove extra pairs if the model requested half-lists
                         if (debug_nl) Kokkos::atomic_fetch_add(&d_stats(1), int64_t(1));
@@ -366,18 +359,16 @@ void MetatomicSystemAdaptorKokkos<DeviceType>::setup_neighbors_kk(metatomic_torc
             auto h_stats = Kokkos::View<int64_t*, Kokkos::LayoutRight, LMPHostType>("h_nl_stats", 12);
             Kokkos::deep_copy(h_stats, d_stats);
             fprintf(stderr,
-                "metatomic-kk-nl-debug [rank %d] (cutoff=%.4f, full_list=%s):\n"
+                "\nmetatomic-kk-nl-debug [rank %d] (cutoff=%.4f, full_list=%s):\n"
                 "  nlocal=%d nghost=%d inum=%d gnum=%d maxneighs=%d\n"
                 "  total_checked=%lld f_half_list=%lld f_both_ghosts=%lld\n"
                 "  f_ghost_orig=%lld f_cutoff=%lld f_half_self_image=%lld\n"
-                "  written=%lld overflow=%lld retries=%d buffer_capacity=%zu\n"
-                "  sum_i=%lld sum_j=%lld n_i_original=%lld n_j_original=%lld\n",
+                "  written=%lld overflow=%lld retries=%d buffer_capacity=%zu\n",
                 comm->me, nl.cutoff, full_list ? "true" : "false",
                 atomKK->nlocal, atomKK->nghost, list->inum, list->gnum, list->maxneighs,
                 (long long)h_stats(0), (long long)h_stats(1), (long long)h_stats(2),
                 (long long)h_stats(3), (long long)h_stats(4), (long long)h_stats(5),
-                (long long)h_stats(6), (long long)h_stats(7), retries, pairs_capacity,
-                (long long)h_stats(8), (long long)h_stats(9), (long long)h_stats(10), (long long)h_stats(11)
+                (long long)h_stats(6), (long long)h_stats(7), retries, pairs_capacity
             );
         }
 
