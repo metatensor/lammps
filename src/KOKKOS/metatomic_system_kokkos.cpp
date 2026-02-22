@@ -509,8 +509,17 @@ metatomic_torch::System MetatomicSystemAdaptorKokkos<DeviceType>::system_from_lm
                 }
                 if (original_atom_id_[i] == i) n_atoms_original++;
             }
-            fprintf(stderr, "metatomic-kk-map-debug [rank %d]: n_map_minus1=%d n_atoms_original=%d mta_to_lmp_size=%zu\n",
+            fprintf(stderr, "\nmetatomic-kk-map-debug [rank %d]: n_map_minus1=%d n_atoms_original=%d mta_to_lmp_size=%zu\n",
                 comm->me, n_map_minus1, n_atoms_original, mta_to_lmp.size());
+        }
+
+        if (debug_nl) {
+            int64_t checksum = 0;
+            for (int i = 0; i < atomKK->nlocal + atomKK->nghost; i++) {
+                checksum += (int64_t)original_atom_id_[i] * (i + 1);
+            }
+            fprintf(stderr, "\nmetatomic-kk-map-debug [rank %d]: checksum=%lld\n",
+                comm->me, (long long)checksum);
         }
     }
 

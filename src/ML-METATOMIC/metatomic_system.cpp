@@ -270,24 +270,88 @@ void MetatomicSystemAdaptor::guess_periodic_ghosts_old() {
 void MetatomicSystemAdaptor::guess_periodic_ghosts() {
     auto _ = MetatomicTimer("identifying periodic ghosts");
     auto total_n_atoms = atom->nlocal + atom->nghost;
-    original_atom_id_.clear();                             
+    double** x = atom->x;
+
+    // Ghost shell bounds: subdomain expanded by the interaction range.
+    // The direct inter-domain ghost (not a periodic image) will always be
+    // inside this region.
+    auto cut = options_.interaction_range;
+    double ghost_lo[3] = {
+        domain->sublo[0] - cut,
+        domain->sublo[1] - cut,
+        domain->sublo[2] - cut,
+    };
+    double ghost_hi[3] = {
+        domain->subhi[0] + cut,
+        domain->subhi[1] + cut,
+        domain->subhi[2] + cut,
+    };
+
+    // First pass: for each unique tag among ghosts, find the representative.
+    // For inter-domain ghosts (tag not owned locally), pick the one inside
+    // the ghost shell (the direct copy, not a periodic image). This is
+    // deterministic regardless of ghost atom ordering.
+    local_atoms_tags_.clear();
+    for (int i = 0; i < atom->nlocal; i++) {
+        local_atoms_tags_.emplace(atom->tag[i], i);
+    }
+
+    ghost_atoms_tags_.clear();
+    for (int i = atom->nlocal; i < total_n_atoms; i++) {
+        auto tag = atom->tag[i];
+        if (local_atoms_tags_.count(tag)) {
+            continue;  // owned locally, local atom is the representative
+        }
+
+        auto it = ghost_atoms_tags_.find(tag);
+        if (it == ghost_atoms_tags_.end()) {
+            // first ghost with this tag
+            ghost_atoms_tags_.emplace(tag, i);
+        } else {
+            // pick the ghost that is inside the ghost shell
+            bool current_in_shell =
+                x[i][0] >= ghost_lo[0] && x[i][0] <= ghost_hi[0] &&
+                x[i][1] >= ghost_lo[1] && x[i][1] <= ghost_hi[1] &&
+                x[i][2] >= ghost_lo[2] && x[i][2] <= ghost_hi[2];
+            if (current_in_shell) {
+                it->second = i;  // replace with the in-shell ghost
+            }
+        }
+    }
+
+    // Second pass: build the mapping arrays
+    original_atom_id_.clear();
     original_atom_id_.reserve(total_n_atoms);
     lmp_to_mta_.clear();
     lmp_to_mta_.reserve(total_n_atoms);
     mta_to_lmp.clear();
     mta_to_lmp.reserve(total_n_atoms);
-    
-    for (int i = 0; i < total_n_atoms; i++) {
-        int mapped = atom->map(atom->tag[i]);
-        original_atom_id_.emplace_back(mapped);
 
-        if (mapped == i) {
-            // this atom is the representative for its tag
-            lmp_to_mta_.emplace_back(mta_to_lmp.size());
-            mta_to_lmp.emplace_back(i);
-        } else {
-            // periodic image, excluded from metatensor
+    for (int i = 0; i < atom->nlocal; i++) {
+        original_atom_id_.emplace_back(i);
+        lmp_to_mta_.emplace_back(mta_to_lmp.size());
+        mta_to_lmp.emplace_back(i);
+    }
+
+    for (int i = atom->nlocal; i < total_n_atoms; i++) {
+        auto tag = atom->tag[i];
+        auto local_it = local_atoms_tags_.find(tag);
+        if (local_it != local_atoms_tags_.end()) {
+            // periodic image of a local atom
+            original_atom_id_.emplace_back(local_it->second);
             lmp_to_mta_.emplace_back(-1);
+        } else {
+            auto ghost_it = ghost_atoms_tags_.find(tag);
+            auto representative = ghost_it->second;
+            original_atom_id_.emplace_back(representative);
+            if (representative == i) {
+                // this ghost IS the representative
+                lmp_to_mta_.emplace_back(mta_to_lmp.size());
+                mta_to_lmp.emplace_back(i);
+            } else {
+                // periodic image of an inter-domain ghost
+                lmp_to_mta_.emplace_back(-1);
+            }
         }
     }
 }
@@ -643,6 +707,36 @@ metatomic_torch::System MetatomicSystemAdaptor::system_from_lmp(
 
     this->guess_periodic_ghosts_old();
     this->guess_periodic_ghosts();
+
+    {
+        static bool debug_nl = (std::getenv("LAMMPS_METATOMIC_DEBUG_NL") != nullptr);
+        if (debug_nl) {
+            int n_map_minus1 = 0;
+            int n_atoms_original = 0;
+            for (int i = 0; i < atom->nlocal + atom->nghost; i++) {
+                int mapped = atom->map(atom->tag[i]);
+                if (mapped == -1) {
+                    n_map_minus1++;
+                    if (n_map_minus1 <= 5) {
+                        fprintf(stderr, "[rank %d] atom->map returned -1 for i=%d tag=%lld (ghost=%s)\n",
+                            comm->me, i, (long long)atom->tag[i], i >= atom->nlocal ? "yes" : "no");
+                    }
+                }
+                if (original_atom_id_[i] == i) n_atoms_original++;
+            }
+            fprintf(stderr, "\nmetatomic-cpu-map-debug [rank %d]: n_map_minus1=%d n_atoms_original=%d mta_to_lmp_size=%zu\n",
+                comm->me, n_map_minus1, n_atoms_original, mta_to_lmp.size());
+        }
+
+        if (debug_nl) {
+            int64_t checksum = 0;
+            for (int i = 0; i < atom->nlocal + atom->nghost; i++) {
+                checksum += (int64_t)original_atom_id_[i] * (i + 1);
+            }
+            fprintf(stderr, "\nmetatomic-cpu-map-debug [rank %d]: checksum=%lld\n",
+                comm->me, (long long)checksum);
+        }
+    }
 
     // Only keep the atoms which are not periodic images of other atoms
     auto mta_to_lmp_tensor = torch::from_blob(
