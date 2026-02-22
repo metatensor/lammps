@@ -496,14 +496,24 @@ metatomic_torch::System MetatomicSystemAdaptorKokkos<DeviceType>::system_from_lm
     {
         static bool debug_nl = (std::getenv("LAMMPS_METATOMIC_DEBUG_NL") != nullptr);
         if (debug_nl) {
+            int n_map_minus1 = 0;
             int n_atoms_original = 0;
-            for (size_t i = 0; i < original_atom_id_.size(); i++) {
-                if (original_atom_id_[i] == static_cast<int>(i)) n_atoms_original++;
+            for (int i = 0; i < atomKK->nlocal + atomKK->nghost; i++) {
+                int mapped = atom->map(atom->tag[i]);
+                if (mapped == -1) {
+                    n_map_minus1++;
+                    if (n_map_minus1 <= 5) {
+                        fprintf(stderr, "[rank %d] atom->map returned -1 for i=%d tag=%lld (ghost=%s)\n",
+                            comm->me, i, (long long)atom->tag[i], i >= atomKK->nlocal ? "yes" : "no");
+                    }
+                }
+                if (original_atom_id_[i] == i) n_atoms_original++;
             }
-            fprintf(stderr, "metatomic-kk-ghost-debug [rank %d]: total_atoms=%zu n_atoms_original=%d mta_to_lmp_size=%zu\n",
-                comm->me, original_atom_id_.size(), n_atoms_original, mta_to_lmp.size());
+            fprintf(stderr, "metatomic-kk-map-debug [rank %d]: n_map_minus1=%d n_atoms_original=%d mta_to_lmp_size=%zu\n",
+                comm->me, n_map_minus1, n_atoms_original, mta_to_lmp.size());
         }
     }
+
     this->mta_to_lmp_tensor = torch::from_blob(
         mta_to_lmp.data(),
         {static_cast<int64_t>(mta_to_lmp.size())},
