@@ -208,89 +208,16 @@ static std::array<int32_t, 3> cell_shifts(
     return {shift_a, shift_b, shift_c};
 }
 
-void MetatomicSystemAdaptor::guess_periodic_ghosts_old() {
-    auto _ = MetatomicTimer("identifying periodic ghosts (old method)");
-    auto total_n_atoms = atom->nlocal + atom->nghost;
-
-    // Collect the local atom id of all local & ghosts atoms, mapping ghosts
-    // atoms which are periodic images of local atoms back to the local atoms.
-    //
-    // metatomic expects pairs corresponding to periodic atoms to be between
-    // the main atoms, but using the actual distance vector between the atom and
-    // the ghost.
-    original_atom_id_old_.clear();
-    original_atom_id_old_.reserve(total_n_atoms);
-
-    lmp_to_mta_old_.clear();
-    lmp_to_mta_old_.reserve(total_n_atoms);
-
-    mta_to_lmp.clear();
-    mta_to_lmp.reserve(total_n_atoms);
-
-    // identify all local atom by their LAMMPS atom tag.
-    local_atoms_tags_.clear();
-    for (int i=0; i<atom->nlocal; i++) {
-        original_atom_id_old_.emplace_back(i);
-        lmp_to_mta_old_.emplace_back(i);
-        mta_to_lmp.emplace_back(i);
-        local_atoms_tags_.emplace(atom->tag[i], i);
-    }
-
-    // now loop over ghosts & map them back to the main cell if needed
-    ghost_atoms_tags_.clear();
-    for (int i=atom->nlocal; i<total_n_atoms; i++) {
-        auto tag = atom->tag[i];
-        auto it = local_atoms_tags_.find(tag);
-        if (it != local_atoms_tags_.end()) {
-            // this is the periodic image of an atom already owned by this domain
-            original_atom_id_old_.emplace_back(it->second);
-            lmp_to_mta_old_.emplace_back(-1);
-        } else {
-            // this can either be a periodic image of an atom owned by another
-            // domain, or directly an atom from another domain. Since we can not
-            // really distinguish between these, we take the first atom as the
-            // "main" one and remap all atoms with the same tag to the first one
-            auto it = ghost_atoms_tags_.find(tag);
-            if (it != ghost_atoms_tags_.end()) {
-                // we already found this atom elsewhere in the system
-                original_atom_id_old_.emplace_back(it->second);
-                lmp_to_mta_old_.emplace_back(-1);
-            } else {
-                // this is the first time we are seeing this atom
-                original_atom_id_old_.emplace_back(i);
-                ghost_atoms_tags_.emplace(tag, i);
-
-                lmp_to_mta_old_.emplace_back(mta_to_lmp.size());
-                mta_to_lmp.emplace_back(i);
-            }
-        }
-    }
-}
-
 void MetatomicSystemAdaptor::guess_periodic_ghosts() {
     auto _ = MetatomicTimer("identifying periodic ghosts");
     auto total_n_atoms = atom->nlocal + atom->nghost;
-    double** x = atom->x;
-
-    // Ghost shell bounds: subdomain expanded by the interaction range.
-    // The direct inter-domain ghost (not a periodic image) will always be
-    // inside this region.
-    auto cut = options_.interaction_range;
-    double ghost_lo[3] = {
-        domain->sublo[0] - cut,
-        domain->sublo[1] - cut,
-        domain->sublo[2] - cut,
-    };
-    double ghost_hi[3] = {
-        domain->subhi[0] + cut,
-        domain->subhi[1] + cut,
-        domain->subhi[2] + cut,
-    };
 
     // First pass: for each unique tag among ghosts, find the representative.
     // For inter-domain ghosts (tag not owned locally), pick the one inside
-    // the ghost shell (the direct copy, not a periodic image). This is
-    // deterministic regardless of ghost atom ordering.
+    // the global simulation box [boxlo, boxhi). LAMMPS keeps all owned atoms
+    // inside this box; when communicated as a ghost, the direct copy retains
+    // this in-box position while periodic images are shifted by cell vectors
+    // and land outside. This is deterministic regardless of ghost ordering.
     local_atoms_tags_.clear();
     for (int i = 0; i < atom->nlocal; i++) {
         local_atoms_tags_.emplace(atom->tag[i], i);
@@ -305,17 +232,12 @@ void MetatomicSystemAdaptor::guess_periodic_ghosts() {
 
         auto it = ghost_atoms_tags_.find(tag);
         if (it == ghost_atoms_tags_.end()) {
-            // first ghost with this tag
+            // first ghost with this tag — tentative representative
             ghost_atoms_tags_.emplace(tag, i);
-        } else {
-            // pick the ghost that is inside the ghost shell
-            bool current_in_shell =
-                x[i][0] >= ghost_lo[0] && x[i][0] <= ghost_hi[0] &&
-                x[i][1] >= ghost_lo[1] && x[i][1] <= ghost_hi[1] &&
-                x[i][2] >= ghost_lo[2] && x[i][2] <= ghost_hi[2];
-            if (current_in_shell) {
-                it->second = i;  // replace with the in-shell ghost
-            }
+        } else if (domain->inside(atom->x[i])) {
+            // this ghost is inside the global box, so it is the direct
+            // inter-domain copy — overwrite the tentative representative
+            it->second = i;
         }
     }
 
@@ -364,8 +286,6 @@ void MetatomicSystemAdaptor::setup_neighbors(metatomic_torch::System& system, Ne
 
     static bool debug_nl = (std::getenv("LAMMPS_METATOMIC_DEBUG_NL") != nullptr);
 
-    static bool print_nl = (std::getenv("LAMMPS_METATOMIC_PRINT_NL") != nullptr);
-
     double** x = atom->x;
     auto cell_inv = this->cell_inverse();
 
@@ -385,8 +305,6 @@ void MetatomicSystemAdaptor::setup_neighbors(metatomic_torch::System& system, Ne
             for (int ii=0; ii<(list->inum + list->gnum); ii++) {
                 auto atom_i = list->ilist[ii];
                 auto original_atom_i = original_atom_id_[atom_i];
-                auto original_atom_i_mtt = original_atom_id_old_[atom_i];
-                auto mtt_i_differs = (original_atom_i_mtt != original_atom_i);
                 auto i_is_original = (atom_i == original_atom_i);
 
                 auto neighbors = list->firstneigh[atom_i];
@@ -399,28 +317,10 @@ void MetatomicSystemAdaptor::setup_neighbors(metatomic_torch::System& system, Ne
 
                     auto atom_j = neighbors[jj] & NEIGHMASK;
                     auto original_atom_j = original_atom_id_[atom_j];
-                    auto original_atom_j_mtt = original_atom_id_old_[atom_j];
-                    auto mtt_j_differs = (original_atom_j_mtt != original_atom_j);
                     auto j_is_original = (atom_j == original_atom_j);
 
-                    std::string msg = "[rank: " + std::to_string(comm->me) + "]";
-                    msg += " pair: " + std::to_string(atom_i) + " (original: " + std::to_string(original_atom_i) + " mtt: " + std::to_string(original_atom_i_mtt) + ") - " + std::to_string(atom_j) + " (original: " + std::to_string(original_atom_j) + " mtt: " + std::to_string(original_atom_j_mtt) + ")";
-
-                    std::string status = "";
-                    auto id_status = "";
-                    if (mtt_i_differs || mtt_j_differs) {
-                        id_status = "[MTT DIFFERS]";
-                    }
-
-                    msg += id_status;
-                    
                     if (!full_list && original_atom_i > original_atom_j) {
                         // Remove extra pairs if the model requested half-lists
-                        status = " (skipped by half-list condition)";
-                        msg += status;
-                        if (comm->me == 0 && print_nl) {
-                            std::cout << msg << std::endl;
-                        }
                         if (debug_nl) {
                             stats[1] += 1;
                         }
@@ -429,11 +329,6 @@ void MetatomicSystemAdaptor::setup_neighbors(metatomic_torch::System& system, Ne
 
                     if (!i_is_original && !j_is_original) {
                         // both atoms are periodic ghosts, skip the pair
-                        // status = " (skipped because both atoms are ghosts)";
-                        msg += status;  
-                        if (comm->me == 0 && print_nl) {
-                            std::cout << msg << std::endl;
-                        }
                         if (debug_nl) {
                             stats[2] += 1;
                         }
@@ -443,11 +338,6 @@ void MetatomicSystemAdaptor::setup_neighbors(metatomic_torch::System& system, Ne
                     if (!i_is_original && j_is_original) {
                         // this pair will be accounted for when we will process
                         // atom_j as the central atom
-                        status = " (skipped because atom_i is a ghost and atom_j is the original)";
-                        msg += status;
-                        if (comm->me == 0 && print_nl) {
-                            std::cout << msg << std::endl;
-                        }
                         if (debug_nl) {
                             stats[3] += 1;
                         }
@@ -468,17 +358,11 @@ void MetatomicSystemAdaptor::setup_neighbors(metatomic_torch::System& system, Ne
                     if (distance2 > cutoff2) {
                         // LAMMPS neighbors list contains some pairs after the
                         // cutoff, we filter them here
-                        status = " (skipped by cutoff filter)";
-                        msg += status;
-                        if (comm->me == 0 && print_nl) {
-                            std::cout << msg << std::endl;
-                        }
                         if (debug_nl) {
                             stats[4] += 1;
                         }
                         continue;
                     }
-
 
                     // Compute the cell shift for the pair.
                     auto shift_i = std::array<double, 3>{
@@ -511,11 +395,6 @@ void MetatomicSystemAdaptor::setup_neighbors(metatomic_torch::System& system, Ne
                             // shifts.
                             if (shift[0] + shift[1] + shift[2] < 0) {
                                 // drop shifts on the negative half-space
-                                status = " (skipped by negative half-space condition)";
-                                msg += status;
-                                if (comm->me == 0 && print_nl) {
-                                    std::cout << msg << std::endl;
-                                }
                                 if (debug_nl) {
                                     stats[5] += 1;
                                 }
@@ -538,24 +417,12 @@ void MetatomicSystemAdaptor::setup_neighbors(metatomic_torch::System& system, Ne
                                 //  X X X │ X X X
                                 //  X X X │ X X X
                                 //  X X X │ X X X
-
-                                status = " (skipped by negative half-plane condition)";
-                                msg += status;
-                                if (comm->me == 0 && print_nl) {
-                                    std::cout << msg << std::endl;
-                                }
                                 if (debug_nl) {
                                     stats[5] += 1;
                                 }
                                 continue;
                             }
                         }
-                    }
-
-                    status = " (kept)";
-                    msg += status;
-                    if (comm->me == 0 && print_nl) {
-                        std::cout << msg << std::endl;
                     }
 
                     if (debug_nl) {
@@ -705,38 +572,7 @@ metatomic_torch::System MetatomicSystemAdaptor::system_from_lmp(
 
     cell.index_put_({torch::logical_not(pbc)}, torch::tensor({0.0}, tensor_options));
 
-    this->guess_periodic_ghosts_old();
     this->guess_periodic_ghosts();
-
-    {
-        static bool debug_nl = (std::getenv("LAMMPS_METATOMIC_DEBUG_NL") != nullptr);
-        if (debug_nl) {
-            int n_map_minus1 = 0;
-            int n_atoms_original = 0;
-            for (int i = 0; i < atom->nlocal + atom->nghost; i++) {
-                int mapped = atom->map(atom->tag[i]);
-                if (mapped == -1) {
-                    n_map_minus1++;
-                    if (n_map_minus1 <= 5) {
-                        fprintf(stderr, "[rank %d] atom->map returned -1 for i=%d tag=%lld (ghost=%s)\n",
-                            comm->me, i, (long long)atom->tag[i], i >= atom->nlocal ? "yes" : "no");
-                    }
-                }
-                if (original_atom_id_[i] == i) n_atoms_original++;
-            }
-            fprintf(stderr, "\nmetatomic-cpu-map-debug [rank %d]: n_map_minus1=%d n_atoms_original=%d mta_to_lmp_size=%zu\n",
-                comm->me, n_map_minus1, n_atoms_original, mta_to_lmp.size());
-        }
-
-        if (debug_nl) {
-            int64_t checksum = 0;
-            for (int i = 0; i < atom->nlocal + atom->nghost; i++) {
-                checksum += (int64_t)original_atom_id_[i] * (i + 1);
-            }
-            fprintf(stderr, "\nmetatomic-cpu-map-debug [rank %d]: checksum=%lld\n",
-                comm->me, (long long)checksum);
-        }
-    }
 
     // Only keep the atoms which are not periodic images of other atoms
     auto mta_to_lmp_tensor = torch::from_blob(

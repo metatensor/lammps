@@ -489,39 +489,12 @@ metatomic_torch::System MetatomicSystemAdaptorKokkos<DeviceType>::system_from_lm
         torch::tensor({0.0}, tensor_options)
     );
 
-    // make sure to sync the updated tags to host
-    atomKK->sync(ExecutionSpaceFromDevice<LMPHostType>::space, TAG_MASK);
+    // Sync tags and positions to host. Tags are needed by
+    // guess_periodic_ghosts() to build the tag->index maps. Positions are
+    // needed because domain->inside(atom->x[i]) is called on the host to
+    // identify the direct inter-domain ghost vs periodic images.
+    atomKK->sync(ExecutionSpaceFromDevice<LMPHostType>::space, TAG_MASK | X_MASK);
     this->guess_periodic_ghosts();
-
-    {
-        static bool debug_nl = (std::getenv("LAMMPS_METATOMIC_DEBUG_NL") != nullptr);
-        if (debug_nl) {
-            int n_map_minus1 = 0;
-            int n_atoms_original = 0;
-            for (int i = 0; i < atomKK->nlocal + atomKK->nghost; i++) {
-                int mapped = atom->map(atom->tag[i]);
-                if (mapped == -1) {
-                    n_map_minus1++;
-                    if (n_map_minus1 <= 5) {
-                        fprintf(stderr, "[rank %d] atom->map returned -1 for i=%d tag=%lld (ghost=%s)\n",
-                            comm->me, i, (long long)atom->tag[i], i >= atomKK->nlocal ? "yes" : "no");
-                    }
-                }
-                if (original_atom_id_[i] == i) n_atoms_original++;
-            }
-            fprintf(stderr, "\nmetatomic-kk-map-debug [rank %d]: n_map_minus1=%d n_atoms_original=%d mta_to_lmp_size=%zu\n",
-                comm->me, n_map_minus1, n_atoms_original, mta_to_lmp.size());
-        }
-
-        if (debug_nl) {
-            int64_t checksum = 0;
-            for (int i = 0; i < atomKK->nlocal + atomKK->nghost; i++) {
-                checksum += (int64_t)original_atom_id_[i] * (i + 1);
-            }
-            fprintf(stderr, "\nmetatomic-kk-map-debug [rank %d]: checksum=%lld\n",
-                comm->me, (long long)checksum);
-        }
-    }
 
     this->mta_to_lmp_tensor = torch::from_blob(
         mta_to_lmp.data(),

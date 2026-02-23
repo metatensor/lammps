@@ -99,7 +99,6 @@ public:
     // Some ghosts atoms correspond to periodic images of other atoms, we need
     // to identify them to avoid duplicated pairs in the neighbor lists.
     void guess_periodic_ghosts();
-    void guess_periodic_ghosts_old();
 
     /// Compute the inverse of the cell matrix of the system, accounting for
     /// non-periodic directions by setting the corresponding rows to an unit vector
@@ -123,11 +122,9 @@ public:
     // given atom tag if the ghost is a periodic image of another ghost; or the
     // id of the ghost in all other cases.
     std::vector<int> original_atom_id_;
-    std::vector<int> original_atom_id_old_;
     // Metatomic atom id for all atoms in the LAMMPS system.
     // Contains `atoms->nlocal + atoms->nghost` elements
     std::vector<int> lmp_to_mta_;
-    std::vector<int> lmp_to_mta_old_;
 
     // allocation cache holding the map from atom tag to atom id for local
     // atoms.
