@@ -211,13 +211,21 @@ static std::array<int32_t, 3> cell_shifts(
 void MetatomicSystemAdaptor::guess_periodic_ghosts() {
     auto _ = MetatomicTimer("identifying periodic ghosts");
     auto total_n_atoms = atom->nlocal + atom->nghost;
+    double** x = atom->x;
 
-    // First pass: for each unique tag among ghosts, find the representative.
-    // For inter-domain ghosts (tag not owned locally), pick the one inside
-    // the global simulation box [boxlo, boxhi). LAMMPS keeps all owned atoms
-    // inside this box; when communicated as a ghost, the direct copy retains
-    // this in-box position while periodic images are shifted by cell vectors
-    // and land outside. This is deterministic regardless of ghost ordering.
+    // Subdomain center: used as the reference point for deterministic
+    // representative selection. Among all ghosts sharing a tag, the one
+    // closest to the subdomain center is chosen. This is deterministic
+    // regardless of ghost array ordering (which is non-deterministic on
+    // GPU) because ghost positions depend only on the original atom
+    // position and exact cell-vector shifts — both of which are
+    // order-independent. Picking the closest ghost also gives the most
+    // natural representative for cell-shift calculations.
+    double center[3] = {
+        0.5 * (domain->sublo[0] + domain->subhi[0]),
+        0.5 * (domain->sublo[1] + domain->subhi[1]),
+        0.5 * (domain->sublo[2] + domain->subhi[2])
+    };
     local_atoms_tags_.clear();
     for (int i = 0; i < atom->nlocal; i++) {
         local_atoms_tags_.emplace(atom->tag[i], i);
@@ -232,12 +240,29 @@ void MetatomicSystemAdaptor::guess_periodic_ghosts() {
 
         auto it = ghost_atoms_tags_.find(tag);
         if (it == ghost_atoms_tags_.end()) {
-            // first ghost with this tag — tentative representative
             ghost_atoms_tags_.emplace(tag, i);
-        } else if (domain->inside(atom->x[i])) {
-            // this ghost is inside the global box, so it is the direct
-            // inter-domain copy — overwrite the tentative representative
-            it->second = i;
+        } else {
+            // Replace if the new ghost is closer to the subdomain center.
+            double dist_new = 0, dist_old = 0;
+            for (int d = 0; d < 3; d++) {
+                double dn = x[i][d] - center[d];
+                double de = x[it->second][d] - center[d];
+                dist_new += dn * dn;
+                dist_old += de * de;
+            }
+            if (dist_new < dist_old) {
+                it->second = i;
+            } else if (dist_new == dist_old) {
+                // Lexicographic tiebreaker for the rare equal-distance case
+                for (int d = 0; d < 3; d++) {           
+                    if (x[i][d] < x[it->second][d]) {
+                        it->second = i;
+                        break;
+                    } else if (x[i][d] > x[it->second][d]) {
+                        break;
+                    }
+                }
+            }
         }
     }
 
