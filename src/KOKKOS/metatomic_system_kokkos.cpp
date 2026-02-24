@@ -135,13 +135,13 @@ void MetatomicSystemAdaptorKokkos<DeviceType>::setup_neighbors_kk(metatomic_torc
         auto full_list = nl.options->full_list();
 
         auto cutoff_ratio = nl.cutoff / options_.interaction_range;
-        uint64_t max_n_pairs = (uint64_t) total_n_atoms * list->maxneighs;
+        size_t max_n_pairs = static_cast<size_t>(total_n_atoms) * list->maxneighs;
         // Allocate for a much smaller number of pairs to avoid wasting memory
         // (especially when the interaction range is much larger than the NL
         // cutoff)
         auto pairs_capacity = std::max(
             std::max(
-                static_cast<uint64_t>(max_n_pairs * cutoff_ratio / 1000),
+                static_cast<size_t>(max_n_pairs * cutoff_ratio / 1000),
                 100ul
             ),
             nl.samples.extent(0)
