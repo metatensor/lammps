@@ -24,8 +24,6 @@
 
 #include "neigh_list.h"
 
-#include <cstdio>
-#include <cstdlib>
 #include <string>
 
 #include <metatensor/torch.hpp>
@@ -309,12 +307,8 @@ void MetatomicSystemAdaptor::setup_neighbors(metatomic_torch::System& system, Ne
     auto dtype = system->positions().scalar_type();
     auto device = system->positions().device();
 
-    static bool debug_nl = (std::getenv("LAMMPS_METATOMIC_DEBUG_NL") != nullptr);
-
     double** x = atom->x;
     auto cell_inv = this->cell_inverse();
-
-    auto stats = std::array<int, 7>{0, 0, 0, 0, 0, 0, 0};
 
     for (auto& nl: nl_requests_) {
         {
@@ -334,38 +328,23 @@ void MetatomicSystemAdaptor::setup_neighbors(metatomic_torch::System& system, Ne
 
                 auto neighbors = list->firstneigh[atom_i];
                 for (int jj=0; jj<list->numneigh[atom_i]; jj++) {
-
-                    if (debug_nl) {
-                        // total num_pairs before any filtering
-                        stats[0] += 1;
-                    }
-
                     auto atom_j = neighbors[jj] & NEIGHMASK;
                     auto original_atom_j = original_atom_id_[atom_j];
                     auto j_is_original = (atom_j == original_atom_j);
 
                     if (!full_list && original_atom_i > original_atom_j) {
                         // Remove extra pairs if the model requested half-lists
-                        if (debug_nl) {
-                            stats[1] += 1;
-                        }
                         continue;
                     }
 
                     if (!i_is_original && !j_is_original) {
                         // both atoms are periodic ghosts, skip the pair
-                        if (debug_nl) {
-                            stats[2] += 1;
-                        }
                         continue;
                     }
 
                     if (!i_is_original && j_is_original) {
                         // this pair will be accounted for when we will process
                         // atom_j as the central atom
-                        if (debug_nl) {
-                            stats[3] += 1;
-                        }
                         continue;
                     }
 
@@ -383,9 +362,6 @@ void MetatomicSystemAdaptor::setup_neighbors(metatomic_torch::System& system, Ne
                     if (distance2 > cutoff2) {
                         // LAMMPS neighbors list contains some pairs after the
                         // cutoff, we filter them here
-                        if (debug_nl) {
-                            stats[4] += 1;
-                        }
                         continue;
                     }
 
@@ -420,9 +396,6 @@ void MetatomicSystemAdaptor::setup_neighbors(metatomic_torch::System& system, Ne
                             // shifts.
                             if (shift[0] + shift[1] + shift[2] < 0) {
                                 // drop shifts on the negative half-space
-                                if (debug_nl) {
-                                    stats[5] += 1;
-                                }
                                 continue;
                             }
 
@@ -442,16 +415,9 @@ void MetatomicSystemAdaptor::setup_neighbors(metatomic_torch::System& system, Ne
                                 //  X X X │ X X X
                                 //  X X X │ X X X
                                 //  X X X │ X X X
-                                if (debug_nl) {
-                                    stats[5] += 1;
-                                }
                                 continue;
                             }
                         }
-                    }
-
-                    if (debug_nl) {
-                        stats[6] += 1;
                     }
 
                     auto sample = std::array<int32_t, 5>{
@@ -476,19 +442,6 @@ void MetatomicSystemAdaptor::setup_neighbors(metatomic_torch::System& system, Ne
                     }
                 }
             }
-        }
-
-        if (debug_nl) {
-            std::fprintf(stderr,
-                "\nmetatomic-cpu-nl-debug [rank %d] (cutoff=%.4f, full_list=%s):\n"
-                "  nlocal=%d nghost=%d inum=%d gnum=%d\n"
-                "  total_checked=%d f_half_list=%d f_both_ghosts=%d\n"
-                "  f_ghost_orig=%d f_cutoff=%d f_half_self_image=%d\n"
-                "  written=%d\n",
-                comm->me, nl.cutoff, nl.options->full_list() ? "true" : "false",
-                 atom->nlocal, atom->nghost, list->inum, list->gnum,
-                 stats[0], stats[1], stats[2], stats[3], stats[4], stats[5], stats[6]
-            );
         }
 
         int64_t n_pairs = nl.samples.size();
