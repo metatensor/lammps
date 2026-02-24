@@ -99,18 +99,18 @@ FixMetatomic::FixMetatomic(LAMMPS *lmp, int narg, char **arg): Fix(lmp, narg, ar
 
     int iarg = 4;
     while (iarg < narg) {
-        if (strcmp(arg[iarg], "check_consistency") == 0) {  
+        if (strcmp(arg[iarg], "check_consistency") == 0) {
             iarg += 1;
-            if (iarg == narg - 1) {
-                error->one(FLERR, "expected <on/off> after 'check_consistency' in pair_style metatomic, got nothing");
-            } else if (strcmp(arg[iarg + 1], "on") == 0) {
+            if (iarg == narg) {
+                error->one(FLERR, "expected <on/off> after 'check_consistency' in fix metatomic, got nothing");
+            } else if (strcmp(arg[iarg], "on") == 0) {
                 mta_data->check_consistency = true;
                 iarg += 1;
-            } else if (strcmp(arg[iarg + 1], "off") == 0) {
+            } else if (strcmp(arg[iarg], "off") == 0) {
                 mta_data->check_consistency = false;
                 iarg += 1;
             } else {
-                error->one(FLERR, "expected <on/off> after 'check_consistency' in fix metatomic, got '{}'", arg[iarg + 1]);
+                error->one(FLERR, "expected <on/off> after 'check_consistency' in fix metatomic, got '{}'", arg[iarg]);
             }
         } else if (strcmp(arg[iarg], "types") == 0) {
             types_are_set = true;
