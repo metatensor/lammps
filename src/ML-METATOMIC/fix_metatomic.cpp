@@ -95,15 +95,30 @@ FixMetatomic::FixMetatomic(LAMMPS *lmp, int narg, char **arg): Fix(lmp, narg, ar
     this->extensions_directory = std::nullopt;
     std::vector<int> parsed_types;
 
+    this->mta_data = new FixMetatomicData(std::move(length_unit));
+
     int iarg = 4;
     while (iarg < narg) {
-        if (strcmp(arg[iarg], "types") == 0) {
+        if (strcmp(arg[iarg], "check_consistency") == 0) {
+            iarg += 1;
+            if (iarg == narg) {
+                error->one(FLERR, "expected <on/off> after 'check_consistency' in fix metatomic, got nothing");
+            } else if (strcmp(arg[iarg], "on") == 0) {
+                mta_data->check_consistency = true;
+                iarg += 1;
+            } else if (strcmp(arg[iarg], "off") == 0) {
+                mta_data->check_consistency = false;
+                iarg += 1;
+            } else {
+                error->one(FLERR, "expected <on/off> after 'check_consistency' in fix metatomic, got '{}'", arg[iarg]);
+            }
+        } else if (strcmp(arg[iarg], "types") == 0) {
             types_are_set = true;
             // Require exactly atom->ntypes integer values after the "types" keyword.
             iarg++;
             if (iarg + atom->ntypes > narg) {
                 error->all(FLERR,
-                    "Illegal fix metatomic command: expected %d type values "
+                    "Illegal fix metatomic command: expected {} type values "
                     "after 'types'", atom->ntypes
                 );
             }
@@ -114,8 +129,8 @@ FixMetatomic::FixMetatomic(LAMMPS *lmp, int narg, char **arg): Fix(lmp, narg, ar
                     type = std::stoi(argstr);
                 } catch (const std::invalid_argument &) {
                     error->all(FLERR,
-                        "Illegal fix metatomic command: expected integer for type %d, "
-                        "got '%s'", ti + 1, argstr
+                        "Illegal fix metatomic command: expected integer for type {}, "
+                        "got '{}'", ti + 1, argstr
                     );
                 } catch (const std::out_of_range &) {
                     error->all(FLERR,
@@ -124,7 +139,7 @@ FixMetatomic::FixMetatomic(LAMMPS *lmp, int narg, char **arg): Fix(lmp, narg, ar
                     );
                 }
                 if (type <= 0) {
-                    error->all(FLERR, "Illegal fix metatomic command: type %d should be > 0", type);
+                    error->all(FLERR, "Illegal fix metatomic command: type {} should be > 0", type);
                 }
                 parsed_types.push_back(type);
             }
@@ -149,8 +164,9 @@ FixMetatomic::FixMetatomic(LAMMPS *lmp, int narg, char **arg): Fix(lmp, narg, ar
             iarg += 2;
         } else {
             error->all(FLERR,
-                "Illegal fix metatomic command: unrecognized option '%s' (expected "
-                "'types', 'device', or `extensions_directory`)", arg[iarg]
+                "Illegal fix metatomic command: unrecognized option '{}' (expected "
+                "'types', 'device', `extensions_directory`, or `check_consistency`)",
+                arg[iarg]
             );
         }
     }
@@ -165,7 +181,6 @@ FixMetatomic::FixMetatomic(LAMMPS *lmp, int narg, char **arg): Fix(lmp, narg, ar
         type_mapping[i] = parsed_types[i - 1];
     }
 
-    this->mta_data = new FixMetatomicData(std::move(length_unit));
 
     // FlashMD needs position change delta-q and momenta p
     auto positions = torch::make_intrusive<metatomic_torch::ModelOutputHolder>(
