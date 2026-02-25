@@ -211,9 +211,19 @@ void MetatomicSystemAdaptor::guess_periodic_ghosts() {
     auto total_n_atoms = atom->nlocal + atom->nghost;
     double** x = atom->x;
 
+    original_atom_id_.clear();
+    original_atom_id_.reserve(total_n_atoms);
+    lmp_to_mta_.clear();
+    lmp_to_mta_.reserve(total_n_atoms);
+    mta_to_lmp.clear();
+    mta_to_lmp.reserve(total_n_atoms);
+
     local_atoms_tags_.clear();
     for (int i = 0; i < atom->nlocal; i++) {
         local_atoms_tags_.emplace(atom->tag[i], i);
+        original_atom_id_.emplace_back(i);
+        lmp_to_mta_.emplace_back(mta_to_lmp.size());
+        mta_to_lmp.emplace_back(i);
     }
 
     // Subdomain center: used as the reference point for deterministic
@@ -271,20 +281,8 @@ void MetatomicSystemAdaptor::guess_periodic_ghosts() {
         }
     }
 
-    // Second pass: build the mapping arrays
-    original_atom_id_.clear();
-    original_atom_id_.reserve(total_n_atoms);
-    lmp_to_mta_.clear();
-    lmp_to_mta_.reserve(total_n_atoms);
-    mta_to_lmp.clear();
-    mta_to_lmp.reserve(total_n_atoms);
-
-    for (int i = 0; i < atom->nlocal; i++) {
-        original_atom_id_.emplace_back(i);
-        lmp_to_mta_.emplace_back(mta_to_lmp.size());
-        mta_to_lmp.emplace_back(i);
-    }
-
+    // Second pass over the ghost atoms to build the mapping arrays,
+    // since now we know which one is the representative for each tag.
     for (int i = atom->nlocal; i < total_n_atoms; i++) {
         auto tag = atom->tag[i];
         auto local_it = local_atoms_tags_.find(tag);
