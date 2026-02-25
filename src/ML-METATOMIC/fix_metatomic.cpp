@@ -118,7 +118,7 @@ FixMetatomic::FixMetatomic(LAMMPS *lmp, int narg, char **arg): Fix(lmp, narg, ar
             iarg++;
             if (iarg + atom->ntypes > narg) {
                 error->all(FLERR,
-                    "Illegal fix metatomic command: expected %d type values "
+                    "Illegal fix metatomic command: expected {} type values "
                     "after 'types'", atom->ntypes
                 );
             }
@@ -129,8 +129,8 @@ FixMetatomic::FixMetatomic(LAMMPS *lmp, int narg, char **arg): Fix(lmp, narg, ar
                     type = std::stoi(argstr);
                 } catch (const std::invalid_argument &) {
                     error->all(FLERR,
-                        "Illegal fix metatomic command: expected integer for type %d, "
-                        "got '%s'", ti + 1, argstr
+                        "Illegal fix metatomic command: expected integer for type {}, "
+                        "got '{}'", ti + 1, argstr
                     );
                 } catch (const std::out_of_range &) {
                     error->all(FLERR,
@@ -139,7 +139,7 @@ FixMetatomic::FixMetatomic(LAMMPS *lmp, int narg, char **arg): Fix(lmp, narg, ar
                     );
                 }
                 if (type <= 0) {
-                    error->all(FLERR, "Illegal fix metatomic command: type %d should be > 0", type);
+                    error->all(FLERR, "Illegal fix metatomic command: type {} should be > 0", type);
                 }
                 parsed_types.push_back(type);
             }
@@ -164,8 +164,9 @@ FixMetatomic::FixMetatomic(LAMMPS *lmp, int narg, char **arg): Fix(lmp, narg, ar
             iarg += 2;
         } else {
             error->all(FLERR,
-                "Illegal fix metatomic command: unrecognized option '%s' (expected "
-                "'types', 'device', or `extensions_directory`)", arg[iarg]
+                "Illegal fix metatomic command: unrecognized option '{}' (expected "
+                "'types', 'device', `extensions_directory`, or `check_consistency`)",
+                arg[iarg]
             );
         }
     }
