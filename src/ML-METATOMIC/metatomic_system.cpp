@@ -211,6 +211,11 @@ void MetatomicSystemAdaptor::guess_periodic_ghosts() {
     auto total_n_atoms = atom->nlocal + atom->nghost;
     double** x = atom->x;
 
+    local_atoms_tags_.clear();
+    for (int i = 0; i < atom->nlocal; i++) {
+        local_atoms_tags_.emplace(atom->tag[i], i);
+    }
+
     // Subdomain center: used as the reference point for deterministic
     // representative selection. Among all ghosts sharing a tag, the one
     // closest to the subdomain center is chosen. This is deterministic
@@ -219,15 +224,17 @@ void MetatomicSystemAdaptor::guess_periodic_ghosts() {
     // position and exact cell-vector shifts — both of which are
     // order-independent. Picking the closest ghost also gives the most
     // natural representative for cell-shift calculations.
+
     double center[3] = {
         0.5 * (domain->sublo[0] + domain->subhi[0]),
         0.5 * (domain->sublo[1] + domain->subhi[1]),
         0.5 * (domain->sublo[2] + domain->subhi[2])
     };
-    local_atoms_tags_.clear();
-    for (int i = 0; i < atom->nlocal; i++) {
-        local_atoms_tags_.emplace(atom->tag[i], i);
-    }
+
+    // We do the first pass over ghost atoms to find the representative for
+    // for each tag, then a second pass to build the mapping arrays. This ensures
+    // that the representative selection is not affected by the order of ghost
+    // atoms in the arrays, which can be non-deterministic on GPU.
 
     ghost_atoms_tags_.clear();
     for (int i = atom->nlocal; i < total_n_atoms; i++) {
