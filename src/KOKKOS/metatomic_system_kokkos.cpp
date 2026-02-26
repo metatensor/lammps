@@ -77,6 +77,30 @@ void MetatomicSystemAdaptorKokkos<DeviceType>::add_nl_request(double cutoff, met
     });
 }
 
+KOKKOS_INLINE_FUNCTION
+Kokkos::Array<int32_t, 3> cell_shifts(
+    const Kokkos::View<double**, Kokkos::LayoutRight, LMPDeviceType>& cell_inv,
+    const double pair_shift[3]
+) {
+    auto shift_a = static_cast<int32_t>(std::round(
+            cell_inv(0, 0) * pair_shift[0] +
+            cell_inv(0, 1) * pair_shift[1] +
+            cell_inv(0, 2) * pair_shift[2]
+    ));
+    auto shift_b = static_cast<int32_t>(std::round(
+        cell_inv(1, 0) * pair_shift[0] +
+        cell_inv(1, 1) * pair_shift[1] +
+        cell_inv(1, 2) * pair_shift[2]
+    ));
+    auto shift_c = static_cast<int32_t>(std::round(
+        cell_inv(2, 0) * pair_shift[0] +
+        cell_inv(2, 1) * pair_shift[1] +
+        cell_inv(2, 2) * pair_shift[2]
+    )); 
+    return {shift_a, shift_b, shift_c};
+}
+
+
 
 template<class DeviceType>
 void MetatomicSystemAdaptorKokkos<DeviceType>::setup_neighbors_kk(metatomic_torch::System& system, NeighListKokkos<DeviceType>* list) {
@@ -86,20 +110,17 @@ void MetatomicSystemAdaptorKokkos<DeviceType>::setup_neighbors_kk(metatomic_torc
     auto total_n_atoms = atomKK->nlocal + atomKK->nghost;
     auto max_number_of_neighbors = list->maxneighs;
 
-    auto original_id = UnmanagedView<int*, LMPHostType>(
-        original_atom_id_.data(),
-        original_atom_id_.size()
+    auto d_original_atom_id = Kokkos::View<int*, Kokkos::LayoutRight, LMPDeviceType>("", original_atom_id_.size());
+    Kokkos::deep_copy(
+        d_original_atom_id,
+        UnmanagedView<int*, LMPHostType>(original_atom_id_.data(), original_atom_id_.size())
     );
-    auto d_original_id = Kokkos::View<int*, Kokkos::LayoutRight, LMPDeviceType>("", original_atom_id_.size());
-    Kokkos::deep_copy(d_original_id, original_id);
 
-    auto lmp_to_mta = UnmanagedView<int*, LMPHostType>(
-        lmp_to_mta_.data(),
-        lmp_to_mta_.size()
-    );
     auto d_lmp_to_mta = Kokkos::View<int*, Kokkos::LayoutRight, LMPDeviceType>("", lmp_to_mta_.size());
-    Kokkos::deep_copy(d_lmp_to_mta, lmp_to_mta);
-
+    Kokkos::deep_copy(
+        d_lmp_to_mta,
+        UnmanagedView<int*, LMPHostType>(lmp_to_mta_.data(), lmp_to_mta_.size())
+    );
 
     auto cell_inv = this->cell_inverse();
     auto d_cell_inv = Kokkos::View<double**, Kokkos::LayoutRight, LMPDeviceType>("cell_inv", 3, 3);
@@ -109,34 +130,12 @@ void MetatomicSystemAdaptorKokkos<DeviceType>::setup_neighbors_kk(metatomic_torc
     );
 
     auto x = atomKK->k_x.view<DeviceType>();
-    auto cell_shifts = KOKKOS_LAMBDA(
-        const Kokkos::View<double**, Kokkos::LayoutRight, LMPDeviceType>& cell_inv,
-        const double pair_shift[3],
-        int32_t shift_out[3]
-    ) {
-        shift_out[0] = static_cast<int32_t>(std::round(
-            cell_inv(0, 0) * pair_shift[0] +
-            cell_inv(0, 1) * pair_shift[1] +
-            cell_inv(0, 2) * pair_shift[2]
-        ));
-        shift_out[1] = static_cast<int32_t>(std::round(
-            cell_inv(1, 0) * pair_shift[0] +
-            cell_inv(1, 1) * pair_shift[1] +
-            cell_inv(1, 2) * pair_shift[2]
-        ));
-        shift_out[2] = static_cast<int32_t>(std::round(
-            cell_inv(2, 0) * pair_shift[0] +
-            cell_inv(2, 1) * pair_shift[1] +
-            cell_inv(2, 2) * pair_shift[2]
-        ));
-    };
-
     for (auto& nl: nl_requests_kk_) {
         auto cutoff2 = nl.cutoff * nl.cutoff;
         auto full_list = nl.options->full_list();
 
         auto cutoff_ratio = nl.cutoff / options_.interaction_range;
-        size_t max_n_pairs = total_n_atoms * list->maxneighs;
+        size_t max_n_pairs = static_cast<size_t>(total_n_atoms) * list->maxneighs;
         // Allocate for a much smaller number of pairs to avoid wasting memory
         // (especially when the interaction range is much larger than the NL
         // cutoff)
@@ -202,14 +201,15 @@ void MetatomicSystemAdaptorKokkos<DeviceType>::setup_neighbors_kk(metatomic_torc
                     {list->inum + list->gnum, max_number_of_neighbors}
                 ),
                 KOKKOS_LAMBDA(size_t ii, size_t jj) {
-                    if (jj >= d_numneigh[ii]) {
+                    auto atom_i = d_ilist[ii];
+                    if (jj >= d_numneigh[atom_i]) {
                         return;
                     }
-                    auto atom_i = d_ilist[ii];
-                    auto original_atom_i = d_original_id[atom_i];
+
+                    auto original_atom_i = d_original_atom_id[atom_i];
                     auto i_is_original = (atom_i == original_atom_i);
-                    auto atom_j = d_neighbors(ii, jj) & NEIGHMASK;
-                    auto original_atom_j = d_original_id[atom_j];
+                    auto atom_j = d_neighbors(atom_i, jj) & NEIGHMASK;
+                    auto original_atom_j = d_original_atom_id[atom_j];
                     auto j_is_original = (atom_j == original_atom_j);
 
                     if (!full_list && original_atom_i > original_atom_j) {
@@ -261,10 +261,9 @@ void MetatomicSystemAdaptorKokkos<DeviceType>::setup_neighbors_kk(metatomic_torc
                         shift_j[1] - shift_i[1],
                         shift_j[2] - shift_i[2],
                     };
-
-                    int32_t shift[3] = {0, 0, 0};
+                    Kokkos::Array<int32_t, 3> shift = {0, 0, 0};
                     if (pair_shift[0] != 0 || pair_shift[1] != 0 || pair_shift[2] != 0) {
-                        cell_shifts(d_cell_inv, pair_shift, shift);
+                        shift = cell_shifts(d_cell_inv, pair_shift);
 
                         if (!full_list && original_atom_i == original_atom_j) {
                             // If a half neighbors list has been requested, do
@@ -405,6 +404,13 @@ metatomic_torch::System MetatomicSystemAdaptorKokkos<DeviceType>::system_from_lm
     auto _ = MetatomicTimer("creating System from LAMMPS-kokkos data");
     assert(device == this->device_);
 
+    // Sync atom data to the device execution space. Positions (X_MASK) and
+    // types (TYPE_MASK) are read on-device by the neighbor list kernel and
+    // type mapping. Tags (TAG_MASK) are read on the host by
+    // guess_periodic_ghosts(). Without these syncs, device-side views may
+    // contain stale data from a previous timestep.
+    atomKK->sync(ExecutionSpaceFromDevice<DeviceType>::space, X_MASK | TYPE_MASK);
+
     auto total_n_atoms = atomKK->nlocal + atomKK->nghost;
 
     atomic_types_.resize_({total_n_atoms});
@@ -442,9 +448,13 @@ metatomic_torch::System MetatomicSystemAdaptorKokkos<DeviceType>::system_from_lm
         torch::tensor({0.0}, tensor_options)
     );
 
-    // make sure to sync the updated tags to host
-    atomKK->sync(ExecutionSpaceFromDevice<LMPHostType>::space, TAG_MASK);
+    // Sync tags and positions to host. Tags are needed by
+    // guess_periodic_ghosts() to build the tag->index maps. Positions are
+    // needed because domain->inside(atom->x[i]) is called on the host to
+    // identify the direct inter-domain ghost vs periodic images.
+    atomKK->sync(ExecutionSpaceFromDevice<LMPHostType>::space, TAG_MASK | X_MASK);
     this->guess_periodic_ghosts();
+
     this->mta_to_lmp_tensor = torch::from_blob(
         mta_to_lmp.data(),
         {static_cast<int64_t>(mta_to_lmp.size())},

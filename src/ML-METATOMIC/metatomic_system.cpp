@@ -18,10 +18,13 @@
 #include "metatomic_timer.h"
 
 #include "atom.h"
+#include "comm.h"
 #include "domain.h"
 #include "error.h"
 
 #include "neigh_list.h"
+
+#include <string>
 
 #include <metatensor/torch.hpp>
 
@@ -206,57 +209,98 @@ static std::array<int32_t, 3> cell_shifts(
 void MetatomicSystemAdaptor::guess_periodic_ghosts() {
     auto _ = MetatomicTimer("identifying periodic ghosts");
     auto total_n_atoms = atom->nlocal + atom->nghost;
+    double** x = atom->x;
 
-    // Collect the local atom id of all local & ghosts atoms, mapping ghosts
-    // atoms which are periodic images of local atoms back to the local atoms.
-    //
-    // metatomic expects pairs corresponding to periodic atoms to be between
-    // the main atoms, but using the actual distance vector between the atom and
-    // the ghost.
     original_atom_id_.clear();
     original_atom_id_.reserve(total_n_atoms);
-
     lmp_to_mta_.clear();
     lmp_to_mta_.reserve(total_n_atoms);
-
     mta_to_lmp.clear();
     mta_to_lmp.reserve(total_n_atoms);
 
-    // identify all local atom by their LAMMPS atom tag.
     local_atoms_tags_.clear();
-    for (int i=0; i<atom->nlocal; i++) {
-        original_atom_id_.emplace_back(i);
-        lmp_to_mta_.emplace_back(i);
-        mta_to_lmp.emplace_back(i);
+    for (int i = 0; i < atom->nlocal; i++) {
         local_atoms_tags_.emplace(atom->tag[i], i);
+        original_atom_id_.emplace_back(i);
+        lmp_to_mta_.emplace_back(mta_to_lmp.size());
+        mta_to_lmp.emplace_back(i);
     }
 
-    // now loop over ghosts & map them back to the main cell if needed
+    // Subdomain center: used as the reference point for deterministic
+    // representative selection. Among all ghosts sharing a tag, the one
+    // closest to the subdomain center is chosen. This is deterministic
+    // regardless of ghost array ordering (which is non-deterministic on
+    // GPU) because ghost positions depend only on the original atom
+    // position and exact cell-vector shifts — both of which are
+    // order-independent. Picking the closest ghost also gives the most
+    // natural representative for cell-shift calculations.
+
+    double center[3] = {
+        0.5 * (domain->sublo[0] + domain->subhi[0]),
+        0.5 * (domain->sublo[1] + domain->subhi[1]),
+        0.5 * (domain->sublo[2] + domain->subhi[2])
+    };
+
+    // We do the first pass over ghost atoms to find the representative for
+    // for each tag, then a second pass to build the mapping arrays. This ensures
+    // that the representative selection is not affected by the order of ghost
+    // atoms in the arrays, which can be non-deterministic on GPU.
+
     ghost_atoms_tags_.clear();
-    for (int i=atom->nlocal; i<total_n_atoms; i++) {
+    for (int i = atom->nlocal; i < total_n_atoms; i++) {
         auto tag = atom->tag[i];
-        auto it = local_atoms_tags_.find(tag);
-        if (it != local_atoms_tags_.end()) {
-            // this is the periodic image of an atom already owned by this domain
-            original_atom_id_.emplace_back(it->second);
+        if (local_atoms_tags_.count(tag)) {
+            continue;  // owned locally, local atom is the representative
+        }
+
+        auto it = ghost_atoms_tags_.find(tag);
+        if (it == ghost_atoms_tags_.end()) {
+            ghost_atoms_tags_.emplace(tag, i);
+        } else {
+            // Replace if the new ghost is closer to the subdomain center.
+            double dist_new = 0, dist_old = 0;
+            for (int d = 0; d < 3; d++) {
+                double dn = x[i][d] - center[d];
+                double de = x[it->second][d] - center[d];
+                dist_new += dn * dn;
+                dist_old += de * de;
+            }
+            if (dist_new < dist_old) {
+                it->second = i;
+            } else if (dist_new == dist_old) {
+                // Lexicographic tiebreaker for the rare equal-distance case
+                for (int d = 0; d < 3; d++) {           
+                    if (x[i][d] < x[it->second][d]) {
+                        it->second = i;
+                        break;
+                    } else if (x[i][d] > x[it->second][d]) {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // Second pass over the ghost atoms to build the mapping arrays,
+    // since now we know which one is the representative for each tag.
+    for (int i = atom->nlocal; i < total_n_atoms; i++) {
+        auto tag = atom->tag[i];
+        auto local_it = local_atoms_tags_.find(tag);
+        if (local_it != local_atoms_tags_.end()) {
+            // periodic image of a local atom
+            original_atom_id_.emplace_back(local_it->second);
             lmp_to_mta_.emplace_back(-1);
         } else {
-            // this can either be a periodic image of an atom owned by another
-            // domain, or directly an atom from another domain. Since we can not
-            // really distinguish between these, we take the first atom as the
-            // "main" one and remap all atoms with the same tag to the first one
-            auto it = ghost_atoms_tags_.find(tag);
-            if (it != ghost_atoms_tags_.end()) {
-                // we already found this atom elsewhere in the system
-                original_atom_id_.emplace_back(it->second);
-                lmp_to_mta_.emplace_back(-1);
-            } else {
-                // this is the first time we are seeing this atom
-                original_atom_id_.emplace_back(i);
-                ghost_atoms_tags_.emplace(tag, i);
-
+            auto ghost_it = ghost_atoms_tags_.find(tag);
+            auto representative = ghost_it->second;
+            original_atom_id_.emplace_back(representative);
+            if (representative == i) {
+                // this ghost IS the representative
                 lmp_to_mta_.emplace_back(mta_to_lmp.size());
                 mta_to_lmp.emplace_back(i);
+            } else {
+                // periodic image of an inter-domain ghost
+                lmp_to_mta_.emplace_back(-1);
             }
         }
     }
@@ -287,8 +331,8 @@ void MetatomicSystemAdaptor::setup_neighbors(metatomic_torch::System& system, Ne
                 auto original_atom_i = original_atom_id_[atom_i];
                 auto i_is_original = (atom_i == original_atom_i);
 
-                auto neighbors = list->firstneigh[ii];
-                for (int jj=0; jj<list->numneigh[ii]; jj++) {
+                auto neighbors = list->firstneigh[atom_i];
+                for (int jj=0; jj<list->numneigh[atom_i]; jj++) {
                     auto atom_j = neighbors[jj] & NEIGHMASK;
                     auto original_atom_j = original_atom_id_[atom_j];
                     auto j_is_original = (atom_j == original_atom_j);
@@ -388,7 +432,6 @@ void MetatomicSystemAdaptor::setup_neighbors(metatomic_torch::System& system, Ne
                         shift[1],
                         shift[2],
                     };
-
                     nl.samples.push_back(sample);
                     if (dtype == torch::kFloat64) {
                         nl.distances_f64.push_back(distance);
