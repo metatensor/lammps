@@ -593,12 +593,11 @@ void PairMetatomic::compute(int eflag, int vflag) {
         } else {
             mta_data->energy_output->per_atom = false;
         }
-
         mta_data->evaluation_options->outputs.insert(mta_data->energy_key, mta_data->energy_output);
+    }
 
-        if (mta_data->uncertainty_output != nullptr) {
-            mta_data->evaluation_options->outputs.insert(mta_data->energy_uq_key, mta_data->uncertainty_output);
-        }
+    if (mta_data->uncertainty_output != nullptr) {
+        mta_data->evaluation_options->outputs.insert(mta_data->energy_uq_key, mta_data->uncertainty_output);
     }
 
     if (mta_data->non_conservative) {
