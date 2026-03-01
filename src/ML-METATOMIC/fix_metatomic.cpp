@@ -200,6 +200,15 @@ FixMetatomic::FixMetatomic(LAMMPS *lmp, int narg, char **arg): Fix(lmp, narg, ar
         /*description =*/ ""
     );
     this->mta_data->evaluation_options->outputs.insert("momenta", momenta);
+
+    // dynamic fusion strategy for torch::jit
+    torch::jit::FusionStrategy strategy = {{torch::jit::FusionBehavior::DYNAMIC, 10}};                                                                                                      
+    torch::jit::setFusionStrategy(strategy);
+
+    // disable some graph optimizations that can actually slow down model inference
+    const char* v = std::getenv("LAMMPS_METATOMIC_DISABLE_TORCH_JIT_OPTIMIZATION");
+    const bool disable = (v != nullptr) && (std::strcmp(v, "1") == 0);
+    if (disable) torch::jit::setGraphExecutorOptimize(false);
 }
 
 FixMetatomic::~FixMetatomic() {

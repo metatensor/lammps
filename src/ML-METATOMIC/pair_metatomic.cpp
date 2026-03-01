@@ -101,6 +101,15 @@ PairMetatomic::PairMetatomic(LAMMPS *lmp):
     this->restartinfo = 0;
     this->one_coeff = 1;
     this->manybody_flag = 1;
+
+    // dynamic fusion strategy for torch::jit
+    torch::jit::FusionStrategy strategy = {{torch::jit::FusionBehavior::DYNAMIC, 10}};                                                                                                      
+    torch::jit::setFusionStrategy(strategy);
+
+    // disable some graph optimizations that can actually slow down model inference
+    const char* v = std::getenv("LAMMPS_METATOMIC_DISABLE_TORCH_JIT_OPTIMIZATION");
+    const bool disable = (v != nullptr) && (std::strcmp(v, "1") == 0);
+    if (disable) torch::jit::setGraphExecutorOptimize(false);
 }
 
 PairMetatomic::~PairMetatomic() {
