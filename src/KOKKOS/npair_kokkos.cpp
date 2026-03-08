@@ -16,6 +16,7 @@
 #include "atom_kokkos.h"
 #include "atom_masks.h"
 #include "domain_kokkos.h"
+#include "error.h"
 #include "update.h"
 #include "neighbor_kokkos.h"
 #include "nbin_kokkos.h"
@@ -233,6 +234,10 @@ void NPairKokkos<DeviceType,HALF,NEWTON,GHOST,TRI,SIZE>::build(NeighList *list_)
   data.special_flag[1] = special_flag[1];
   data.special_flag[2] = special_flag[2];
   data.special_flag[3] = special_flag[3];
+
+  if (atoms_per_bin <= 0)
+    error->one(FLERR, "Kokkos neighbor list bin size produced zero atoms_per_bin; "
+        "try increasing neigh_modify binsize");
 
   data.h_resize()=1;
   while (data.h_resize()) {

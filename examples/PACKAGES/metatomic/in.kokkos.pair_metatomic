@@ -20,6 +20,10 @@ velocity all create 123 42
 pair_style metatomic/kk nickel-lj.pt
 pair_coeff * * 28
 
+# For dense systems with large cutoffs (e.g. PET-MAD, ~5.5 A interaction range),
+# pair_style metatomic will auto-adjust binsize, one, and page. To override:
+# neigh_modify one 100000 page 1000000 binsize 5.5
+
 # pair_style hybrid/overlay/kk metatomic_1/kk nickel-lj.pt metatomic_2/kk nickel-lj.pt
 # pair_coeff * * metatomic_1/kk 28
 # pair_coeff * * metatomic_2/kk 28
