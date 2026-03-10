@@ -15,8 +15,10 @@ OPT.
    * :doc:`adapt/fep <fix_adapt_fep>`
    * :doc:`addforce (k) <fix_addforce>`
    * :doc:`add/heat <fix_add_heat>`
-   * :doc:`addtorque <fix_addtorque>`
+   * :doc:`addtorque/atom <fix_addtorque_atom>`
+   * :doc:`addtorque/group <fix_addtorque_group>`
    * :doc:`alchemy <fix_alchemy>`
+   * :doc:`align/self <fix_align_self>`
    * :doc:`amoeba/bitorsion <fix_amoeba_bitorsion>`
    * :doc:`amoeba/pitorsion <fix_amoeba_pitorsion>`
    * :doc:`append/atoms <fix_append_atoms>`
@@ -72,7 +74,7 @@ OPT.
    * :doc:`eos/table <fix_eos_table>`
    * :doc:`eos/table/rx (k) <fix_eos_table_rx>`
    * :doc:`evaporate <fix_evaporate>`
-   * :doc:`external <fix_external>`
+   * :doc:`external (k) <fix_external>`
    * :doc:`ffl <fix_ffl>`
    * :doc:`filter/corotate <fix_filter_corotate>`
    * :doc:`flow/gauss <fix_flow_gauss>`
@@ -81,6 +83,12 @@ OPT.
    * :doc:`gjf <fix_gjf>`
    * :doc:`gld <fix_gld>`
    * :doc:`gle <fix_gle>`
+   * :doc:`graphics/arrows <fix_graphics_arrows>`
+   * :doc:`graphics/isosurface <fix_graphics_isosurface>`
+   * :doc:`graphics/labels <fix_graphics_labels>`
+   * :doc:`graphics/lines <fix_graphics_lines>`
+   * :doc:`graphics/objects <fix_graphics_objects>`
+   * :doc:`graphics/periodic <fix_graphics_periodic>`
    * :doc:`gravity (ko) <fix_gravity>`
    * :doc:`grem <fix_grem>`
    * :doc:`halt <fix_halt>`
@@ -134,7 +142,7 @@ OPT.
    * :doc:`numdiff <fix_numdiff>`
    * :doc:`numdiff/virial <fix_numdiff_virial>`
    * :doc:`nve (giko) <fix_nve>`
-   * :doc:`nve/asphere (gi) <fix_nve_asphere>`
+   * :doc:`nve/asphere (gik) <fix_nve_asphere>`
    * :doc:`nve/asphere/noforce <fix_nve_asphere_noforce>`
    * :doc:`nve/body <fix_nve_body>`
    * :doc:`nve/dot <fix_nve_dot>`
@@ -222,6 +230,7 @@ OPT.
    * :doc:`saed/vtk <fix_saed_vtk>`
    * :doc:`set <fix_set>`
    * :doc:`setforce (k) <fix_setforce>`
+   * :doc:`settorque/atom <fix_settorque_atom>`
    * :doc:`setforce/spin <fix_setforce>`
    * :doc:`sgcmc <fix_sgcmc>`
    * :doc:`shake (k) <fix_shake>`
@@ -271,6 +280,7 @@ OPT.
    * :doc:`wall/gran (k) <fix_wall_gran>`
    * :doc:`wall/gran/region <fix_wall_gran_region>`
    * :doc:`wall/harmonic <fix_wall>`
+   * :doc:`wall/harmonic/outside <fix_wall>`
    * :doc:`wall/lj1043 <fix_wall>`
    * :doc:`wall/lj126 <fix_wall>`
    * :doc:`wall/lj93 (k) <fix_wall>`

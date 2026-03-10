@@ -1899,7 +1899,7 @@ int DumpCustom::modify_param(int narg, char **arg)
   while (input && input->arg[argoff] && (strcmp(input->arg[argoff], arg[0]) != 0)) argoff++;
 
   if (strcmp(arg[0],"region") == 0) {
-    if (narg < 2) utils::missing_cmd_args(FLERR, "dump_modify", error);
+    if (narg < 2) utils::missing_cmd_args(FLERR, "dump_modify region", error);
     if (strcmp(arg[1],"none") == 0) {
       delete[] idregion;
       idregion = nullptr;
@@ -2254,7 +2254,7 @@ int DumpCustom::modify_param(int narg, char **arg)
     else error->all(FLERR,"Invalid dump_modify thresh operator");
 
     // set threshold value as number or special LAST keyword
-    // create FixStore to hold LAST values, should work with restart
+    // create FixStoreAtom to hold LAST values, should work with restart
     // id = dump-ID + nthreshlast + DUMP_STORE, fix group = dump group
 
     if (strcmp(arg[3],"LAST") != 0) {

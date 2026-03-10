@@ -64,6 +64,7 @@ Molecule::Molecule(LAMMPS *lmp) :
   toffset = 0;
   boffset = aoffset = doffset = ioffset = 0;
   sizescale = 1.0;
+  for (int i = 0; i < 4; i++) check_which_labels[i] = 0;
   json_format = 0;
 
   // initialize all fields to empty
@@ -134,6 +135,17 @@ void Molecule::command(int narg, char **arg, int &index)
       sizescale = utils::numeric(FLERR, arg[iarg + 1], false, lmp);
       if (sizescale <= 0.0) error->all(FLERR, iarg + 1, "Illegal scale factor {}", sizescale);
       iarg += 2;
+    } else if (strcmp(arg[iarg], "check_labels") == 0) {
+      if (iarg + 2 > narg) utils::missing_cmd_args(FLERR, "check_labels", error);
+      if (strchr(arg[iarg + 1], 'b'))
+        check_which_labels[0] = 1;
+      if (strchr(arg[iarg + 1], 'a'))
+        check_which_labels[1] = 1;
+      if (strchr(arg[iarg + 1], 'd'))
+        check_which_labels[2] = 1;
+      if (strchr(arg[iarg + 1], 'i'))
+        check_which_labels[3] = 1;
+      iarg += 2;
     } else
       break;
   }
@@ -158,7 +170,7 @@ void Molecule::command(int narg, char **arg, int &index)
   // JSON files must have the extension .json
 
   std::string filename = arg[fileiarg];
-  if (utils::strmatch(filename, "\\.json$")) {
+  if (utils::strmatch(filename, R"(\.json$)")) {
 
     json moldata;
     std::vector<std::uint8_t> jsondata;
@@ -221,6 +233,7 @@ void Molecule::command(int narg, char **arg, int &index)
     Molecule::read(1);
     if (comm->me == 0) fclose(fp);
   }
+  if (comm->me == 0) Molecule::check_labels();
   Molecule::stats();
 }
 
@@ -671,7 +684,7 @@ void Molecule::from_json(const std::string &molid, const json &moldata)
           error->all(FLERR, Error::NOLASTLINE,
                      "Molecule template {}: invalid atom type in \"types\" JSON section", id,
                      typestr);
-        type[iatom] = atom->lmap->find(typestr, Atom::ATOM);
+        type[iatom] = atom->lmap->find_type(typestr, Atom::ATOM);
         if (type[iatom] == -1)
           error->all(FLERR, Error::NOLASTLINE,
                      "Molecule template {}: Unknown atom type {} in \"types\" JSON section", id,
@@ -1056,7 +1069,7 @@ void Molecule::from_json(const std::string &molid, const json &moldata)
               error->all(FLERR, Error::NOLASTLINE,
                          "Molecule template {}: invalid bond type in \"bonds\" JSON section", id,
                          typestr);
-            itype = atom->lmap->find(typestr, Atom::BOND);
+            itype = atom->lmap->find_type(typestr, Atom::BOND);
             if (itype == -1)
               error->all(FLERR, Error::NOLASTLINE,
                          "Molecule template {}: Unknown bond type {} in \"bonds\" JSON section", id,
@@ -1148,7 +1161,7 @@ void Molecule::from_json(const std::string &molid, const json &moldata)
               error->all(FLERR, Error::NOLASTLINE,
                          "Molecule template {}: invalid angle type in \"angles\" JSON section", id,
                          typestr);
-            itype = atom->lmap->find(typestr, Atom::ANGLE);
+            itype = atom->lmap->find_type(typestr, Atom::ANGLE);
             if (itype == -1)
               error->all(FLERR, Error::NOLASTLINE,
                          "Molecule template {}: Unknown angle type {} in \"angles\" JSON section",
@@ -1259,7 +1272,7 @@ void Molecule::from_json(const std::string &molid, const json &moldata)
                   FLERR, Error::NOLASTLINE,
                   "Molecule template {}: invalid dihedral type in \"dihedrals\" JSON section", id,
                   typestr);
-            itype = atom->lmap->find(typestr, Atom::DIHEDRAL);
+            itype = atom->lmap->find_type(typestr, Atom::DIHEDRAL);
             if (itype == -1)
               error->all(
                   FLERR, Error::NOLASTLINE,
@@ -1384,7 +1397,7 @@ void Molecule::from_json(const std::string &molid, const json &moldata)
                   FLERR, Error::NOLASTLINE,
                   "Molecule template {}: invalid improper type in \"impropers\" JSON section", id,
                   typestr);
-            itype = atom->lmap->find(typestr, Atom::IMPROPER);
+            itype = atom->lmap->find_type(typestr, Atom::IMPROPER);
             if (itype == -1)
               error->all(
                   FLERR, Error::NOLASTLINE,
@@ -1805,7 +1818,7 @@ void Molecule::from_json(const std::string &molid, const json &moldata)
                "Molecule template {}: \"shake\" info is incomplete in JSON data");
   if (bodyflag && !rmassflag)
     error->all(FLERR, Error::NOLASTLINE,
-               "Molecule template {}: \"body\" JSON section requires \"masses\" section", id);
+               R"(Molecule template {}: "body" JSON section requires "masses" section)", id);
 
   // auto-generate special bonds if needed and not in file
 
@@ -1882,7 +1895,7 @@ json Molecule::to_json() const
     moldata["types"]["format"] = {"atom-id", "type"};
     if (atom->labelmapflag && atom->lmap->is_complete(Atom::ATOM)) {
       for (int i = 0; i < natoms; ++i) {
-        moldata["types"]["data"][i] = {i + 1, atom->lmap->find(type[i], Atom::ATOM)};
+        moldata["types"]["data"][i] = {i + 1, atom->lmap->find_label(type[i], Atom::ATOM)};
       }
     } else {
       for (int i = 0; i < natoms; ++i) moldata["types"]["data"][i] = {i + 1, type[i]};
@@ -1939,7 +1952,7 @@ json Molecule::to_json() const
       for (int j = 0; j < num_bond[i]; j++) {
         if (has_newton_bond || (i + 1 < bond_atom[i][j])) {
           if (has_typelabels) {
-            moldata["bonds"]["data"][idx] = {atom->lmap->find(bond_type[i][j], Atom::BOND), i + 1,
+            moldata["bonds"]["data"][idx] = {atom->lmap->find_label(bond_type[i][j], Atom::BOND), i + 1,
                                              bond_atom[i][j]};
           } else {
             moldata["bonds"]["data"][idx] = {bond_type[i][j], i + 1, bond_atom[i][j]};
@@ -1958,7 +1971,7 @@ json Molecule::to_json() const
       for (int j = 0; j < num_angle[i]; j++) {
         if (has_newton_bond || (i + 1 == angle_atom2[i][j])) {
           if (has_typelabels) {
-            moldata["angles"]["data"][idx] = {atom->lmap->find(angle_type[i][j], Atom::ANGLE),
+            moldata["angles"]["data"][idx] = {atom->lmap->find_label(angle_type[i][j], Atom::ANGLE),
                                               angle_atom1[i][j], angle_atom2[i][j],
                                               angle_atom3[i][j]};
           } else {
@@ -1980,7 +1993,7 @@ json Molecule::to_json() const
         if (has_newton_bond || (i + 1 == dihedral_atom2[i][j])) {
           if (has_typelabels) {
             moldata["dihedrals"]["data"][idx] = {
-                atom->lmap->find(dihedral_type[i][j], Atom::DIHEDRAL), dihedral_atom1[i][j],
+                atom->lmap->find_label(dihedral_type[i][j], Atom::DIHEDRAL), dihedral_atom1[i][j],
                 dihedral_atom2[i][j], dihedral_atom3[i][j], dihedral_atom4[i][j]};
           } else {
             moldata["dihedrals"]["data"][idx] = {dihedral_type[i][j], dihedral_atom1[i][j],
@@ -2002,7 +2015,7 @@ json Molecule::to_json() const
         if (has_newton_bond || (i + 1 == improper_atom2[i][j])) {
           if (has_typelabels) {
             moldata["impropers"]["data"][idx] = {
-                atom->lmap->find(improper_type[i][j], Atom::IMPROPER), improper_atom1[i][j],
+                atom->lmap->find_label(improper_type[i][j], Atom::IMPROPER), improper_atom1[i][j],
                 improper_atom2[i][j], improper_atom3[i][j], improper_atom4[i][j]};
           } else {
             moldata["impropers"]["data"][idx] = {improper_type[i][j], improper_atom1[i][j],
@@ -2043,9 +2056,9 @@ json Molecule::to_json() const
                                                      shake_atom[i][2]};
           if (has_typelabels) {
             moldata["shake"]["types"]["data"][i][1] = {
-                atom->lmap->find(shake_type[i][0], Atom::BOND),
-                atom->lmap->find(shake_type[i][1], Atom::BOND),
-                atom->lmap->find(shake_type[i][2], Atom::ANGLE)};
+                atom->lmap->find_label(shake_type[i][0], Atom::BOND),
+                atom->lmap->find_label(shake_type[i][1], Atom::BOND),
+                atom->lmap->find_label(shake_type[i][2], Atom::ANGLE)};
           } else {
             moldata["shake"]["types"]["data"][i][1] = {shake_type[i][0], shake_type[i][1],
                                                        shake_type[i][2]};
@@ -2055,8 +2068,8 @@ json Molecule::to_json() const
           moldata["shake"]["atoms"]["data"][i][1] = {shake_atom[i][0], shake_atom[i][1]};
           if (has_typelabels) {
             moldata["shake"]["types"]["data"][i][1] = {
-                atom->lmap->find(shake_type[i][0], Atom::BOND),
-                atom->lmap->find(shake_type[i][1], Atom::BOND)};
+                atom->lmap->find_label(shake_type[i][0], Atom::BOND),
+                atom->lmap->find_label(shake_type[i][1], Atom::BOND)};
           } else {
             moldata["shake"]["types"]["data"][i][1] = {shake_type[i][0], shake_type[i][1]};
           }
@@ -2066,9 +2079,9 @@ json Molecule::to_json() const
                                                      shake_atom[i][2]};
           if (has_typelabels) {
             moldata["shake"]["types"]["data"][i][1] = {
-                atom->lmap->find(shake_type[i][0], Atom::BOND),
-                atom->lmap->find(shake_type[i][1], Atom::BOND),
-                atom->lmap->find(shake_type[i][2], Atom::BOND)};
+                atom->lmap->find_label(shake_type[i][0], Atom::BOND),
+                atom->lmap->find_label(shake_type[i][1], Atom::BOND),
+                atom->lmap->find_label(shake_type[i][2], Atom::BOND)};
           } else {
             moldata["shake"]["types"]["data"][i][1] = {shake_type[i][0], shake_type[i][1],
                                                        shake_type[i][2]};
@@ -2079,10 +2092,10 @@ json Molecule::to_json() const
                                                      shake_atom[i][2], shake_atom[i][3]};
           if (has_typelabels) {
             moldata["shake"]["types"]["data"][i][1] = {
-                atom->lmap->find(shake_type[i][0], Atom::BOND),
-                atom->lmap->find(shake_type[i][1], Atom::BOND),
-                atom->lmap->find(shake_type[i][2], Atom::BOND),
-                atom->lmap->find(shake_type[i][3], Atom::BOND)};
+                atom->lmap->find_label(shake_type[i][0], Atom::BOND),
+                atom->lmap->find_label(shake_type[i][1], Atom::BOND),
+                atom->lmap->find_label(shake_type[i][2], Atom::BOND),
+                atom->lmap->find_label(shake_type[i][3], Atom::BOND)};
           } else {
             moldata["shake"]["types"]["data"][i][1] = {shake_type[i][0], shake_type[i][1],
                                                        shake_type[i][2], shake_type[i][3]};
@@ -2363,7 +2376,7 @@ void Molecule::read(int flag)
 
     // check for units keyword in first line and print warning on mismatch
 
-    auto units = Tokenizer(utils::strfind(line, "units = \\w+")).as_vector();
+    auto units = Tokenizer(utils::strfind(line, R"(units = \w+)")).as_vector();
     if ((flag == 0) && (units.size() > 2)) {
       if (units[2] != update->unit_style)
         error->warning(FLERR, "Inconsistent units in data file: current = {}, data file = {}",
@@ -2388,7 +2401,7 @@ void Molecule::read(int flag)
 
     auto text = utils::trim(utils::trim_comment(line));
     if (text.empty()) continue;
-    if (utils::strmatch(text, "^\\s*#")) continue;
+    if (utils::strmatch(text, R"(^\s*#)")) continue;
 
     // search line for header keywords and set corresponding variable
     try {
@@ -2396,31 +2409,31 @@ void Molecule::read(int flag)
 
       int nmatch = values.count();
       int nwant = 0;
-      if (values.matches("^\\s*\\d+\\s+atoms\\s*$")) {
+      if (values.matches(R"(^\s*\d+\s+atoms\s*$)")) {
         natoms = values.next_int();
         nwant = 2;
         has_atoms = true;
-      } else if (values.matches("^\\s*\\d+\\s+bonds\\s*$")) {
+      } else if (values.matches(R"(^\s*\d+\s+bonds\s*$)")) {
         nbonds = values.next_int();
         nwant = 2;
-      } else if (values.matches("^\\s*\\d+\\s+angles\\s*$")) {
+      } else if (values.matches(R"(^\s*\d+\s+angles\s*$)")) {
         nangles = values.next_int();
         nwant = 2;
-      } else if (values.matches("^\\s*\\d+\\s+dihedrals\\s*$")) {
+      } else if (values.matches(R"(^\s*\d+\s+dihedrals\s*$)")) {
         ndihedrals = values.next_int();
         nwant = 2;
-      } else if (values.matches("^\\s*\\d+\\s+impropers\\s*$")) {
+      } else if (values.matches(R"(^\s*\d+\s+impropers\s*$)")) {
         nimpropers = values.next_int();
         nwant = 2;
-      } else if (values.matches("^\\s*\\d+\\s+fragments\\s*$")) {
+      } else if (values.matches(R"(^\s*\d+\s+fragments\s*$)")) {
         nfragments = values.next_int();
         nwant = 2;
-      } else if (values.matches("^\\s*\\f+\\s+mass\\s*$")) {
+      } else if (values.matches(R"(^\s*\f+\s+mass\s*$)")) {
         massflag = massflag_user = 1;
         masstotal = values.next_double();
         nwant = 2;
         masstotal *= sizescale * sizescale * sizescale;
-      } else if (values.matches("^\\s*\\f+\\s+\\f+\\s+\\f+\\s+com\\s*$")) {
+      } else if (values.matches(R"(^\s*\f+\s+\f+\s+\f+\s+com\s*$)")) {
         comflag = comflag_user = 1;
         com[0] = values.next_double();
         com[1] = values.next_double();
@@ -2431,7 +2444,7 @@ void Molecule::read(int flag)
         com[2] *= sizescale;
         if ((domain->dimension == 2) && (com[2] != 0.0))
           error->all(FLERR, fileiarg, "Molecule file z center-of-mass must be 0.0 for 2d systems");
-      } else if (values.matches("^\\s*\\f+\\s+\\f+\\s+\\f+\\s+\\f+\\s+\\f+\\s+\\f+\\s+inertia\\s*$")) {
+      } else if (values.matches(R"(^\s*\f+\s+\f+\s+\f+\s+\f+\s+\f+\s+\f+\s+inertia\s*$)")) {
         inertiaflag = inertiaflag_user = 1;
         itensor[0] = values.next_double();
         itensor[1] = values.next_double();
@@ -2447,20 +2460,20 @@ void Molecule::read(int flag)
         itensor[3] *= scale5;
         itensor[4] *= scale5;
         itensor[5] *= scale5;
-      } else if (values.matches("^\\s*\\d+\\s+\\d+\\s+body\\s*$")) {
+      } else if (values.matches(R"(^\s*\d+\s+\d+\s+body\s*$)")) {
         bodyflag = 1;
         avec_body = dynamic_cast<AtomVecBody *>(atom->style_match("body"));
         if (!avec_body) error->all(FLERR, fileiarg, "Molecule file requires atom style body");
         nibody = values.next_int();
         ndbody = values.next_int();
         nwant = 3;
-      } else if (values.matches("^\\s*\\d+\\s+\\S+\\s+types\\s*$")) {
+      } else if (values.matches(R"(^\s*\d+\s+\S+\s+types\s*$)")) {
         error->all(FLERR, fileiarg, "Found data file header keyword '{}' in molecule file", text);
-      } else if (values.matches("^\\s*\\f+\\s+\\f+\\s+[xyz]lo\\s+[xyz]hi\\s*$")) {
+      } else if (values.matches(R"(^\s*\f+\s+\f+\s+[xyz]lo\s+[xyz]hi\s*$)")) {
         error->all(FLERR, fileiarg, "Found data file header keyword '{}' in molecule file", text);
       } else {
         // unknown header keyword
-        if (values.matches("^\\s*\\f+\\s+\\S+")) {
+        if (values.matches(R"(^\s*\f+\s+\S+)")) {
           error->all(FLERR, fileiarg, "Unknown keyword or incorrectly formatted header line: {}",
                      line);
         } else
@@ -2772,7 +2785,7 @@ void Molecule::types(char *line)
         if (!atom->labelmapflag)
           error->all(FLERR, fileiarg, "Invalid atom type {} in {}: {}", typestr, location,
                      utils::trim(line));
-        type[iatom] = atom->lmap->find(typestr, Atom::ATOM);
+        type[iatom] = atom->lmap->find_type(typestr, Atom::ATOM);
         if (type[iatom] == -1)
           error->all(FLERR, fileiarg, "Unknown atom type {} in {}: {}", typestr, location,
                      utils::trim(line));
@@ -3050,7 +3063,7 @@ void Molecule::bonds(int flag, char *line)
       case 1: {    // type label
         if (!atom->labelmapflag)
           error->all(FLERR, fileiarg, "Invalid bond type {} in {}: {}", typestr, location, utils::trim(line));
-        itype = atom->lmap->find(typestr, Atom::BOND);
+        itype = atom->lmap->find_type(typestr, Atom::BOND);
         if (itype == -1)
           error->all(FLERR, fileiarg, "Unknown bond type {} in {}: {}", typestr, location, utils::trim(line));
         break;
@@ -3136,7 +3149,7 @@ void Molecule::angles(int flag, char *line)
       case 1: {    // type label
         if (!atom->labelmapflag)
           error->all(FLERR, fileiarg, "Invalid angle type {} in {}: {}", typestr, location, utils::trim(line));
-        itype = atom->lmap->find(typestr, Atom::ANGLE);
+        itype = atom->lmap->find_type(typestr, Atom::ANGLE);
         if (itype == -1)
           error->all(FLERR, fileiarg, "Unknown angle type {} in {}: {}", typestr, location, utils::trim(line));
         break;
@@ -3237,7 +3250,7 @@ void Molecule::dihedrals(int flag, char *line)
       case 1: {    // type label
         if (!atom->labelmapflag)
           error->all(FLERR, fileiarg, "Invalid dihedral type {} in {}: {}", typestr, location, utils::trim(line));
-        itype = atom->lmap->find(typestr, Atom::DIHEDRAL);
+        itype = atom->lmap->find_type(typestr, Atom::DIHEDRAL);
         if (itype == -1)
           error->all(FLERR, fileiarg, "Unknown dihedral type {} in {}: {}", typestr, location, utils::trim(line));
         break;
@@ -3352,7 +3365,7 @@ void Molecule::impropers(int flag, char *line)
       case 1: {    // type label
         if (!atom->labelmapflag)
           error->all(FLERR, fileiarg, "Invalid improper type {} in {}: {}", typestr, location, utils::trim(line));
-        itype = atom->lmap->find(typestr, Atom::IMPROPER);
+        itype = atom->lmap->find_type(typestr, Atom::IMPROPER);
         if (itype == -1)
           error->all(FLERR, fileiarg, "Unknown improper type {} in {}: {}", typestr, location, utils::trim(line));
         break;
@@ -4224,6 +4237,110 @@ void Molecule::skip_lines(int n, char *line, const std::string &section)
   }
 }
 
+/* ----------------------------------------------------------------------
+   check type label self-consistency
+------------------------------------------------------------------------- */
+
+void Molecule::check_labels()
+{
+  if (atom->labelmapflag) {
+    // in rare cases, bonds are not symmetric. only check if newton on for bonds
+    if (force->newton_bond && check_which_labels[0]) {
+      for (int i = 0; i < natoms; i++) {
+        int atom1 = i+1;
+        for (int j = 0; j < num_bond[i]; j++) {
+          int btype = bond_type[i][j];
+          int atom2 = bond_atom[i][j];
+          int inferred_type = atom->lmap->infer_bondtype(type[atom1-1], type[atom2-1]);
+          if (inferred_type != btype) {
+            std::string atom1_label = atom->lmap->find_label(type[atom1-1], Atom::ATOM);
+            std::string atom2_label = atom->lmap->find_label(type[atom2-1], Atom::ATOM);
+            std::string blabel = atom->lmap->find_label(btype, Atom::BOND);
+            if (inferred_type == -btype)
+              error->warning(FLERR, "In molecule template '{}', the bond between atoms {}, {} has constituent atom types ({}, {}) in reverse "
+                                    "order compared to its bond type label ({})", id, atom1, atom2, atom1_label, atom2_label, blabel);
+            else error->warning(FLERR, "In molecule template '{}', the bond between atoms {}, {} has constituent atom types ({}, {}) that do "
+                                       "not match its type label ({})", id, atom1, atom2, atom1_label, atom2_label, blabel);
+          }
+        }
+      }
+    }
+    // some angles are not symmetric, like class2
+    if (check_which_labels[1]) {
+      for (int i = 0; i < natoms; i++) {
+        for (int j = 0; j < num_angle[i]; j++) {
+          int atype = angle_type[i][j];
+          int atom1 = angle_atom1[i][j];
+          int atom2 = angle_atom2[i][j];
+          int atom3 = angle_atom3[i][j];
+          int inferred_type = atom->lmap->infer_angletype(type[atom1-1], type[atom2-1], type[atom3-1]);
+          if (inferred_type != atype) {
+            std::string atom1_label = atom->lmap->find_label(type[atom1-1], Atom::ATOM);
+            std::string atom2_label = atom->lmap->find_label(type[atom2-1], Atom::ATOM);
+            std::string atom3_label = atom->lmap->find_label(type[atom3-1], Atom::ATOM);
+            std::string alabel = atom->lmap->find_label(atype, Atom::ANGLE);
+            if (inferred_type == -atype)
+              error->warning(FLERR, "In molecule template '{}', the angle between atoms {}, {}, {} has constituent atom types ({}, {}, {}) in reverse "
+                                    "order compared to its angle type label ({})", id, atom1, atom2, atom3, atom1_label, atom2_label, atom3_label, alabel);
+            else error->warning(FLERR, "In molecule template '{}', the angle between atoms {}, {}, {} has constituent atom types ({}, {}, {}) that do not "
+                                       "match its type label ({})", id, atom1, atom2, atom3, atom1_label, atom2_label, atom3_label, alabel);
+          }
+        }
+      }
+    }
+    // some dihedrals are not symmetric, like class2
+    if (check_which_labels[2]) {
+      for (int i = 0; i < natoms; i++) {
+        for (int j = 0; j < num_dihedral[i]; j++) {
+          int dtype = dihedral_type[i][j];
+          int atom1 = dihedral_atom1[i][j];
+          int atom2 = dihedral_atom2[i][j];
+          int atom3 = dihedral_atom3[i][j];
+          int atom4 = dihedral_atom4[i][j];
+          int inferred_type = atom->lmap->infer_dihedraltype(type[atom1-1], type[atom2-1], type[atom3-1], type[atom4-1]);
+          if (inferred_type != dtype) {
+            std::string atom1_label = atom->lmap->find_label(type[atom1-1], Atom::ATOM);
+            std::string atom2_label = atom->lmap->find_label(type[atom2-1], Atom::ATOM);
+            std::string atom3_label = atom->lmap->find_label(type[atom3-1], Atom::ATOM);
+            std::string atom4_label = atom->lmap->find_label(type[atom4-1], Atom::ATOM);
+            std::string dlabel = atom->lmap->find_label(dtype, Atom::DIHEDRAL);
+            if (inferred_type == -dtype)
+              error->warning(FLERR, "In molecule template '{}', the dihedral between atoms {}, {}, {}, {} has constituent atom types ({}, {}, {}, {}) in reverse order "
+                                    "compared to its dihedral type label ({})", id, atom1, atom2, atom3, atom4, atom1_label, atom2_label, atom3_label, atom4_label, dlabel);
+            else error->warning(FLERR, "In molecule template '{}', the dihedral between atoms {}, {}, {}, {} has constituent atom types ({}, {}, {}, {}) that do "
+                                       "not match its dihedral label ({})", id, atom1, atom2, atom3, atom4, atom1_label, atom2_label, atom3_label, atom4_label, dlabel);
+          }
+        }
+      }
+    }
+    // some impropers are not symmetric, like class2
+    if (check_which_labels[3]) {
+      for (int i = 0; i < natoms; i++) {
+        for (int j = 0; j < num_improper[i]; j++) {
+          int itype = improper_type[i][j];
+          int atom1 = improper_atom1[i][j];
+          int atom2 = improper_atom2[i][j];
+          int atom3 = improper_atom3[i][j];
+          int atom4 = improper_atom4[i][j];
+          int inferred_type = atom->lmap->infer_impropertype(type[atom1-1], type[atom2-1], type[atom3-1], type[atom4-1]);
+          if (inferred_type != itype) {
+            std::string atom1_label = atom->lmap->find_label(type[atom1-1], Atom::ATOM);
+            std::string atom2_label = atom->lmap->find_label(type[atom2-1], Atom::ATOM);
+            std::string atom3_label = atom->lmap->find_label(type[atom3-1], Atom::ATOM);
+            std::string atom4_label = atom->lmap->find_label(type[atom4-1], Atom::ATOM);
+            std::string ilabel = atom->lmap->find_label(itype, Atom::IMPROPER);
+            if (inferred_type == -itype)
+              error->warning(FLERR, "In molecule template '{}', the improper containing atoms {}, {}, {}, {} has constituent atom types ({}, {}, {}, {}) in a different order "
+                                    "compared to its improper type label ({})", id, atom1, atom2, atom3, atom4, atom1_label, atom2_label, atom3_label, atom4_label, ilabel);
+            else error->warning(FLERR, "In molecule template '{}', the improper containing atoms {}, {}, {}, {} has constituent atom types ({}, {}, {}, {}) that do "
+                                       "not match its improper label ({})", id, atom1, atom2, atom3, atom4, atom1_label, atom2_label, atom3_label, atom4_label, ilabel);
+          }
+        }
+      }
+    }
+  }
+}
+
 /* ------------------------------------------------------------------------------ */
 
 void Molecule::stats()
@@ -4274,7 +4391,7 @@ void Molecule::print(FILE *fp)
     fputs("\nTypes\n\n", fp);
     if (atom->labelmapflag && atom->lmap->is_complete(Atom::ATOM)) {
       for (int i = 0; i < natoms; i++)
-        utils::print(fp, " {} {}\n", i + 1, atom->lmap->find(type[i], Atom::ATOM));
+        utils::print(fp, " {} {}\n", i + 1, atom->lmap->find_label(type[i], Atom::ATOM));
     } else {
       for (int i = 0; i < natoms; i++) utils::print(fp, " {}  {}\n", i + 1, type[i]);
     }
@@ -4329,7 +4446,7 @@ void Molecule::print(FILE *fp)
         if (has_newton_bond || (i + 1 < bond_atom[i][j])) {
           ++idx;
           if (has_typelabels) {
-            utils::print(fp, " {}  {}", idx, atom->lmap->find(bond_type[i][j], Atom::BOND));
+            utils::print(fp, " {}  {}", idx, atom->lmap->find_label(bond_type[i][j], Atom::BOND));
           } else {
             utils::print(fp, " {}  {}", idx, bond_type[i][j]);
           }
@@ -4348,7 +4465,7 @@ void Molecule::print(FILE *fp)
         if (has_newton_bond || (i + 1 == angle_atom2[i][j])) {
           ++idx;
           if (has_typelabels) {
-            utils::print(fp, " {}  {}", idx, atom->lmap->find(angle_type[i][j], Atom::ANGLE));
+            utils::print(fp, " {}  {}", idx, atom->lmap->find_label(angle_type[i][j], Atom::ANGLE));
           } else {
             utils::print(fp, " {}  {}", idx, angle_type[i][j]);
           }
@@ -4367,7 +4484,7 @@ void Molecule::print(FILE *fp)
         if (has_newton_bond || (i + 1 == dihedral_atom2[i][j])) {
           ++idx;
           if (has_typelabels) {
-            utils::print(fp, " {}  {}", idx, atom->lmap->find(dihedral_type[i][j], Atom::DIHEDRAL));
+            utils::print(fp, " {}  {}", idx, atom->lmap->find_label(dihedral_type[i][j], Atom::DIHEDRAL));
           } else {
             utils::print(fp, " {}  {}", idx, dihedral_type[i][j]);
           }
@@ -4387,7 +4504,7 @@ void Molecule::print(FILE *fp)
         if (has_newton_bond || (i + 1 == improper_atom2[i][j])) {
           ++idx;
           if (has_typelabels) {
-            utils::print(fp, " {}  {}", idx, atom->lmap->find(improper_type[i][j], Atom::IMPROPER));
+            utils::print(fp, " {}  {}", idx, atom->lmap->find_label(improper_type[i][j], Atom::IMPROPER));
           } else {
             utils::print(fp, " {}  {}", idx, improper_type[i][j]);
           }
@@ -4452,9 +4569,9 @@ void Molecule::print(FILE *fp)
         case 1:
           has_typelabels = has_typelabels && atom->lmap->is_complete(Atom::ANGLE);
           if (has_typelabels) {
-            utils::print(fp, " {} {} {}\n", atom->lmap->find(shake_type[i][0], Atom::BOND),
-                         atom->lmap->find(shake_type[i][1], Atom::BOND),
-                         atom->lmap->find(shake_type[i][2], Atom::ANGLE));
+            utils::print(fp, " {} {} {}\n", atom->lmap->find_label(shake_type[i][0], Atom::BOND),
+                         atom->lmap->find_label(shake_type[i][1], Atom::BOND),
+                         atom->lmap->find_label(shake_type[i][2], Atom::ANGLE));
           } else {
             utils::print(fp, " {} {} {}\n", shake_type[i][0], shake_type[i][1], shake_type[i][2]);
           }
@@ -4462,8 +4579,8 @@ void Molecule::print(FILE *fp)
 
         case 2:
           if (has_typelabels) {
-            utils::print(fp, " {} {}\n", atom->lmap->find(shake_type[i][0], Atom::BOND),
-                         atom->lmap->find(shake_type[i][1], Atom::BOND));
+            utils::print(fp, " {} {}\n", atom->lmap->find_label(shake_type[i][0], Atom::BOND),
+                         atom->lmap->find_label(shake_type[i][1], Atom::BOND));
           } else {
             utils::print(fp, " {} {}\n", shake_type[i][0], shake_type[i][1]);
           }
@@ -4471,9 +4588,9 @@ void Molecule::print(FILE *fp)
 
         case 3:
           if (has_typelabels) {
-            utils::print(fp, " {} {} {}\n", atom->lmap->find(shake_type[i][0], Atom::BOND),
-                         atom->lmap->find(shake_type[i][1], Atom::BOND),
-                         atom->lmap->find(shake_type[i][2], Atom::BOND));
+            utils::print(fp, " {} {} {}\n", atom->lmap->find_label(shake_type[i][0], Atom::BOND),
+                         atom->lmap->find_label(shake_type[i][1], Atom::BOND),
+                         atom->lmap->find_label(shake_type[i][2], Atom::BOND));
           } else {
             utils::print(fp, " {} {} {}\n", shake_type[i][0], shake_type[i][1], shake_type[i][2]);
           }
@@ -4481,10 +4598,10 @@ void Molecule::print(FILE *fp)
 
         case 4:
           if (has_typelabels) {
-            utils::print(fp, " {} {} {} {}\n", atom->lmap->find(shake_type[i][0], Atom::BOND),
-                         atom->lmap->find(shake_type[i][1], Atom::BOND),
-                         atom->lmap->find(shake_type[i][2], Atom::BOND),
-                         atom->lmap->find(shake_type[i][3], Atom::BOND));
+            utils::print(fp, " {} {} {} {}\n", atom->lmap->find_label(shake_type[i][0], Atom::BOND),
+                         atom->lmap->find_label(shake_type[i][1], Atom::BOND),
+                         atom->lmap->find_label(shake_type[i][2], Atom::BOND),
+                         atom->lmap->find_label(shake_type[i][3], Atom::BOND));
           } else {
             utils::print(fp, " {} {} {} {}\n", shake_type[i][0], shake_type[i][1], shake_type[i][2],
                          shake_type[i][3]);
