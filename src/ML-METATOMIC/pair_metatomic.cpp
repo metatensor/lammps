@@ -570,14 +570,17 @@ void PairMetatomic::init_style() {
         (4.0/3.0) * M_PI * pow(cutoff_with_skin, 3) * density * 2.0
     );
     if (est_neighbors > neighbor->oneatom) {
-        error->one(FLERR,
-            "The metatomic model cutoff ({:.4f}) with current system density "
-            "requires approximately {} neighbors per atom, but neigh_modify one "
-            "is only {}. Add 'neigh_modify one {} page {} binsize {:.4f}' "
-            "to your input script.",
-            mta_data->max_cutoff, est_neighbors, neighbor->oneatom,
-            est_neighbors, est_neighbors * 10,
-            0.5 * mta_data->max_cutoff);
+        // Auto-adjust one/page to avoid SIGFPE in Kokkos NL builder
+        if (comm->me == 0) {
+            error->message(FLERR,
+                "Metatomic model cutoff ({:.4f}) with current density requires "
+                "~{} neighbors per atom; auto-adjusting neigh_modify one/page. "
+                "To set manually, use at least: neigh_modify one {} page {}",
+                mta_data->max_cutoff, est_neighbors,
+                est_neighbors, est_neighbors * 10);
+        }
+        neighbor->oneatom = est_neighbors;
+        neighbor->pgsize = est_neighbors * 10;
     }
 
     // Translate from the metatomic neighbor lists requests to LAMMPS neighbor
