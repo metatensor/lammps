@@ -58,6 +58,16 @@ struct MetatomicNeighborsData {
     std::vector<std::array<float, 3>> distances_f32;
 };
 
+// Build a per-atom TensorMap from values shaped as [atoms, components...].
+// A property dimension is appended automatically.
+metatensor_torch::TensorMap make_per_atom_tensormap(
+    const torch::Tensor& values,
+    const torch::ScalarType& dtype,
+    const torch::Device& device,
+    const std::string& property_name,
+    const std::vector<std::string>& component_names = {}
+);
+
 class MetatomicSystemAdaptor : public Pointers {
 public:
     MetatomicSystemAdaptor(LAMMPS *lmp, MetatomicSystemOptions options);
@@ -82,14 +92,9 @@ public:
     // Add momenta as extra data to this system, only for atoms which are not
     // periodic images of other atoms
     virtual void add_momenta(metatomic_torch::System& system, double unit_conversion);
-    // Build a per-atom TensorMap from values shaped as [atoms, components...].
-    // A property dimension is appended automatically.
-    virtual metatensor_torch::TensorMap make_per_atom_tensormap(
-        const torch::Tensor& values,
-        torch::ScalarType dtype,
-        const torch::Device& device,
-        const std::vector<std::string>& component_names = {}
-    );
+    // Add velocities as extra data to this system, only for atoms which are not
+    // periodic images of other atoms
+    virtual void add_velocities(metatomic_torch::System& system, double unit_conversion);
 
     // Explicit strain for virial calculations. This uses the same dtype/device
     // as LAMMPS data (positions, …)
