@@ -70,11 +70,12 @@ void PairMetatomicKokkos<DeviceType>::init_style() {
     this->type_mapping_kk = Kokkos::View<int32_t*, Kokkos::LayoutRight, DeviceType>("type_mapping_kk", atom->ntypes + 1);
     Kokkos::deep_copy(this->type_mapping_kk, type_mapping_kk_host);
 
+    using NCMode = PairMetatomicData::NonConservativeMode;
     auto options = MetatomicSystemOptions{
         this->type_mapping_kk.data(),
         mta_data->max_cutoff,
         mta_data->check_consistency,
-        !(mta_data->non_conservative),
+        mta_data->non_conservative != NCMode::ON, // autograd needed for OFF/FORCES/STRESS
     };
 
     // override the system adaptor with the kokkos version
@@ -112,6 +113,7 @@ void PairMetatomicKokkos<DeviceType>::pick_device(torch::Device& device, const c
 
 template<class DeviceType>
 void PairMetatomicKokkos<DeviceType>::store_forces(const at::Tensor& forces_tensor) {
+    using NCMode = PairMetatomicData::NonConservativeMode;
     assert(forces_tensor.scalar_type() == torch::kFloat64);
     auto forces = forces_tensor.contiguous();
 
@@ -131,8 +133,8 @@ void PairMetatomicKokkos<DeviceType>::store_forces(const at::Tensor& forces_tens
         }
     );
 
-    // in non-conservative mode we do not need to update forces on ghost atoms
-    if (!mta_data->non_conservative) {
+    // ghost atom forces only exist when forces come from autograd
+    if (mta_data->non_conservative == NCMode::OFF || mta_data->non_conservative == NCMode::STRESS) {
         auto system_adaptor_kk = dynamic_cast<MetatomicSystemAdaptorKokkos<DeviceType>*>(this->system_adaptor.get());
         assert(system_adaptor_kk != nullptr);
         auto mta_to_lmp_kk = UnmanagedView<int32_t*, DeviceType>(
