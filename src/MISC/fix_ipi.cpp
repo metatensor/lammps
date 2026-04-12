@@ -27,6 +27,7 @@
 #include "kspace.h"
 #include "modify.h"
 #include "neighbor.h"
+#include "timer.h"
 #include "update.h"
 
 #include <cstring>
@@ -208,6 +209,7 @@ FixIPI::FixIPI(LAMMPS *lmp, int narg, char **arg) : Fix(lmp, narg, arg), irregul
     error->all(FLERR, "Invalid port for fix ipi: {}", port);
 
   hasdata = bsize = 0;
+  exit_flag = 0;
 
   // creates a temperature compute for all atoms
   modify->add_compute("IPI_TEMP all temp");
@@ -302,12 +304,12 @@ void FixIPI::initial_integrate(int /*vflag*/)
       else break;
     }
 
-    if (strcmp(header,"EXIT        ") == 0)
-      error->one(FLERR, "Got EXIT message from i-PI. Now leaving!");
-
-    // when i-PI signals it has positions to evaluate new forces,
-    // read positions and cell data
-    if (strcmp(header,"POSDATA     ") == 0)  {
+    // on EXIT, mark nat with a sentinel so all ranks can break out of
+    // the run loop cleanly (via timer->force_timeout) and let LAMMPS
+    // print the end-of-run timing summary.
+    if (strcmp(header,"EXIT        ") == 0) {
+      nat = -1;
+    } else if (strcmp(header,"POSDATA     ") == 0)  {
       readbuffer(ipisock, (char*) cellh, 9*8, error);
       readbuffer(ipisock, (char*) cellih, 9*8, error);
       readbuffer(ipisock, (char*) &nat, 4, error);
@@ -327,6 +329,16 @@ void FixIPI::initial_integrate(int /*vflag*/)
 
   // shares the atomic coordinates with everyone
   MPI_Bcast(&nat,1,MPI_INT,0,world);
+
+  // sentinel from the master EXIT branch above: trigger a clean run
+  // termination so Verlet's loop breaks out and Finish::end() prints
+  // the timing summary. exit_flag tells final_integrate to no-op.
+  if (nat == -1) {
+    timer->force_timeout();
+    exit_flag = 1;
+    return;
+  }
+
   // must also allocate the buffer on the non-head nodes
   if (bsize==0) {
     bsize=3*nat;
@@ -440,6 +452,14 @@ void FixIPI::final_integrate()
   double forceconv, potconv, posconv, pressconv, posconv3;
   char retstr[1024] = { '\0' };
 
+  // initial_integrate signalled an EXIT for this step. The intervening
+  // force compute already ran on stale positions; just skip the socket
+  // I/O so the run loop can break out at the next check_timeout.
+  if (exit_flag) {
+    hasdata = 0;
+    return;
+  }
+
   // conversions from LAMMPS units to atomic units, which are used by i-PI
   potconv=3.1668152e-06/force->boltz;
   posconv=0.52917721*force->angstrom;
@@ -491,6 +511,7 @@ void FixIPI::final_integrate()
     retstr[0] = '\0';
   }
 
+  int exit_now = 0;
   if (master) {
     // check for new messages
     while (true) {
@@ -501,10 +522,9 @@ void FixIPI::final_integrate()
       else break;
     }
 
-    if (strcmp(header,"EXIT        ") == 0)
-      error->one(FLERR, "Got EXIT message from i-PI. Now leaving!");
-
-    if (strcmp(header,"GETFORCE    ") == 0)  {
+    if (strcmp(header,"EXIT        ") == 0) {
+      exit_now = 1;
+    } else if (strcmp(header,"GETFORCE    ") == 0)  {
       // return force and energy data
       writebuffer(ipisock,"FORCEREADY  ",MSGLEN, error);
       writebuffer(ipisock,(char*) &pot,8, error);
@@ -517,6 +537,15 @@ void FixIPI::final_integrate()
     }
     else
       error->one(FLERR, "Wrapper did not ask for forces, I will now die!");
+  }
+
+  // propagate the EXIT decision so all ranks force_timeout together;
+  // the next Verlet iteration's check_timeout will then break the loop
+  // cleanly and let Finish::end() print the timing summary.
+  MPI_Bcast(&exit_now, 1, MPI_INT, 0, world);
+  if (exit_now) {
+    timer->force_timeout();
+    exit_flag = 1;
   }
 
   hasdata=0;
