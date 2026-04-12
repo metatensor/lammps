@@ -304,9 +304,8 @@ void FixIPI::initial_integrate(int /*vflag*/)
       else break;
     }
 
-    // on EXIT, mark nat with a sentinel so all ranks can break out of
-    // the run loop cleanly (via timer->force_timeout) and let LAMMPS
-    // print the end-of-run timing summary.
+    // on EXIT set nat to -1 so all ranks can break out of
+    // the run loop cleanly (via timer->force_timeout)
     if (strcmp(header,"EXIT        ") == 0) {
       nat = -1;
     } else if (strcmp(header,"POSDATA     ") == 0)  {
@@ -330,9 +329,9 @@ void FixIPI::initial_integrate(int /*vflag*/)
   // shares the atomic coordinates with everyone
   MPI_Bcast(&nat,1,MPI_INT,0,world);
 
-  // sentinel from the master EXIT branch above: trigger a clean run
-  // termination so Verlet's loop breaks out and Finish::end() prints
-  // the timing summary. exit_flag tells final_integrate to no-op.
+  // trigger a clean run termination so the main loop breaks out and
+  // Finish::end() can be triggered. exit_flag is set so final_integrate
+  // no-ops.
   if (nat == -1) {
     timer->force_timeout();
     exit_flag = 1;
@@ -385,7 +384,7 @@ void FixIPI::initial_integrate(int /*vflag*/)
 
   // ensure atoms are in current box & update box via shrink-wrap
   // has to be be done before invoking Irregular::migrate_atoms()
-  //   since it requires atoms be inside simulation box
+  // since it requires atoms be inside simulation box
 
   // folds atomic coordinates close to the origin
   if (domain->triclinic) domain->x2lamda(atom->nlocal);
@@ -540,8 +539,7 @@ void FixIPI::final_integrate()
   }
 
   // propagate the EXIT decision so all ranks force_timeout together;
-  // the next Verlet iteration's check_timeout will then break the loop
-  // cleanly and let Finish::end() print the timing summary.
+  // the next Verlet iteration's check_timeout will then end the run cleanly
   MPI_Bcast(&exit_now, 1, MPI_INT, 0, world);
   if (exit_now) {
     timer->force_timeout();
