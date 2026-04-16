@@ -310,7 +310,11 @@ void PairMetatomic::settings(int argc, char ** argv) {
             mta_data->nc_forces_key = pick_output("non_conservative_forces", outputs, v_nc_forces);
         } catch (std::exception& e) {
             error->one(FLERR,
-                "{} Consider using 'non_conservative stress' or 'non_conservative off' instead.",
+                "{}\nFailed to select 'non_conservative_forces' output. "
+                "If the model does not support non-conservative forces, use "
+                "'non_conservative stress' or 'non_conservative off'. "
+                "If the model provides multiple variants, select one with "
+                "'variant/non_conservative_forces <name>'.",
                 e.what()
             );
         }
@@ -322,7 +326,11 @@ void PairMetatomic::settings(int argc, char ** argv) {
             mta_data->nc_stress_key = pick_output("non_conservative_stress", outputs, v_nc_stress);
         } catch (std::exception& e) {
             error->one(FLERR,
-                "{} Consider using 'non_conservative forces' or 'non_conservative off' instead.",
+                "{}\nFailed to select 'non_conservative_stress' output. "
+                "If the model does not support non-conservative stress, use "
+                "'non_conservative forces' or 'non_conservative off'. "
+                "If the model provides multiple variants, select one with "
+                "'variant/non_conservative_stress <name>'.",
                 e.what()
             );
         }
