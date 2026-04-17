@@ -44,6 +44,7 @@
 
 #include "metatomic_system.h"
 #include "metatomic_timer.h"
+#include "metatomic_units.h"
 
 using namespace LAMMPS_NS;
 
@@ -72,21 +73,11 @@ PairMetatomic::PairMetatomic(LAMMPS *lmp):
     system_adaptor(nullptr),
     scale(1.0)
 {
-    if (strcmp(update->unit_style, "real") == 0) {
-        this->length_unit = "angstrom";
-        this->energy_unit = "kcal/mol";
-    } else if (strcmp(update->unit_style, "metal") == 0) {
-        this->length_unit = "angstrom";
-        this->energy_unit = "eV";
-    } else if (strcmp(update->unit_style, "si") == 0) {
-        this->length_unit = "meter";
-        this->energy_unit = "joule";
-    } else if (strcmp(update->unit_style, "electron") == 0) {
-        this->length_unit = "Bohr";
-        this->energy_unit = "Hartree";
-    } else {
+    if (strcmp(update->unit_style, "lj") == 0) {
         error->one(FLERR, "unsupported units '{}' for pair metatomic ", update->unit_style);
     }
+    this->length_unit = unit_map.at("position").at(update->unit_style);
+    this->energy_unit = unit_map.at("energy").at(update->unit_style);
 
     // we might not be running a pure pair potential,
     // so we can not compute virial as fdotr
