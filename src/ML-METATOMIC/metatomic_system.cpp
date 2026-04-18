@@ -26,6 +26,7 @@
 
 #include "neigh_list.h"
 
+#include <map>
 #include <string>
 
 #include <metatensor/torch.hpp>
@@ -573,7 +574,7 @@ metatomic_torch::System MetatomicSystemAdaptor::system_from_lmp(
     bool do_virial,
     torch::ScalarType dtype,
     torch::Device device,
-    const std::vector<torch::intrusive_ptr<metatomic_torch::ModelOutputHolder>>& inputs
+    const std::map<std::string, torch::intrusive_ptr<metatomic_torch::ModelOutputHolder>>& inputs
 ) {
     auto _ = MetatomicTimer("creating System from LAMMPS data");
 
@@ -642,18 +643,18 @@ metatomic_torch::System MetatomicSystemAdaptor::system_from_lmp(
 
     this->setup_neighbors(system, list);
 
-    for (const auto& input: inputs) {
-        const auto& quantity = input->quantity().c_str();
+    for (const auto& [property, input]: inputs) {
+        const auto& property_name = property.c_str();
         const auto& unit = input->unit().c_str();
-        if (strcmp(quantity, "mass") == 0) {
-            add_masses(system, metatomic_torch::unit_conversion_factor(quantity, unit_map.at("mass").at(update->unit_style), unit));
-        } else if (strcmp(quantity, "momentum") == 0) {
+        if (strcmp(property_name, "masses") == 0) {
+            add_masses(system, metatomic_torch::unit_conversion_factor(unit_map.at("mass").at(update->unit_style), unit));
+        } else if (strcmp(property_name, "momenta") == 0) {
             const auto& momentum_unit = unit_map.at("mass").at(update->unit_style) + "*" + unit_map.at("velocity").at(update->unit_style);
-            add_momenta(system, metatomic_torch::unit_conversion_factor(quantity, momentum_unit, unit));
-        } else if (strcmp(quantity, "velocity") == 0) {
-            add_velocities(system, metatomic_torch::unit_conversion_factor(quantity, unit_map.at("velocity").at(update->unit_style), unit));
+            add_momenta(system, metatomic_torch::unit_conversion_factor(momentum_unit, unit));
+        } else if (strcmp(property_name, "velocities") == 0) {
+            add_velocities(system, metatomic_torch::unit_conversion_factor(unit_map.at("velocity").at(update->unit_style), unit));
         } else {
-            error->all(FLERR, "compute metatomic: the model requested an unsupported additional input of quantity '{}'", quantity);
+            error->all(FLERR, "compute metatomic: the model requested an unsupported additional input of '{}'", property_name);
         }
     }
 

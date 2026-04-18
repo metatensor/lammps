@@ -37,7 +37,9 @@
     #include <torch/mps.h>
 #endif
 
+#include <map>
 #include <memory>
+#include <string>
 
 #include <metatensor/torch.hpp>
 #include <metatomic/torch.hpp>
@@ -85,7 +87,7 @@ PairMetatomic::PairMetatomic(LAMMPS *lmp):
 
     this->mta_data = new PairMetatomicData(this->length_unit);
     // use a default uncertainty threshold of 100 meV/atom
-    this->mta_data->uncertainty_threshold = 0.1 * metatomic_torch::unit_conversion_factor("energy", "eV", energy_unit);
+    this->mta_data->uncertainty_threshold = 0.1 * metatomic_torch::unit_conversion_factor("eV", energy_unit);
 
     // settings for metatomic pair style
     this->single_enable = 0;
@@ -673,12 +675,23 @@ void PairMetatomic::compute(int eflag, int vflag) {
         error->one(FLERR, "the model requested an unsupported dtype '{}'", mta_data->capabilities->dtype());
     }
 
+    // deal with the model requested inputs
+    std::map<std::string, metatomic_torch::ModelOutput> input_holders;
+    auto requested_inputs = mta_data->model->run_method("requested_inputs").toGenericDict();
+    for (const auto& entry : requested_inputs) {
+        input_holders.emplace(
+            entry.key().toStringRef(),
+            entry.value().toCustomClass<metatomic_torch::ModelOutputHolder>()
+        );
+    }
+
     // transform from LAMMPS to metatomic System
     auto system = this->system_adaptor->system_from_lmp(
         mta_list,
         vflag_global && !do_nc_stress,
         dtype,
-        mta_data->device
+        mta_data->device,
+        input_holders
     );
 
     // only run the calculation for atoms actually in the current domain

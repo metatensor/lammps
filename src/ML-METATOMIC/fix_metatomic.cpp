@@ -71,7 +71,7 @@ FixMetatomic::FixMetatomic(LAMMPS *lmp, int narg, char **arg): Fix(lmp, narg, ar
     std::string mass_unit = unit_map.at("mass").at(update->unit_style);
     std::string velocity_unit = unit_map.at("velocity").at(update->unit_style);
     std::string momentum_unit = mass_unit + "*" + velocity_unit;
-    this->momentum_conversion_factor = metatomic_torch::unit_conversion_factor("momentum", momentum_unit, "(u*eV)^(1/2)");
+    this->momentum_conversion_factor = metatomic_torch::unit_conversion_factor(momentum_unit, "(u*eV)^(1/2)");
 
     if (narg < 4) {
         error->all(FLERR,
@@ -436,16 +436,26 @@ void FixMetatomic::initial_integrate(int /*vflag*/) {
         error->all(FLERR, "the model requested an unsupported dtype '{}'", mta_data->capabilities->dtype());
     }
 
+    // deal with the model requested inputs
+    std::map<std::string, metatomic_torch::ModelOutput> input_holders;
+    auto requested_inputs = mta_data->model->run_method("requested_inputs").toGenericDict();
+    for (const auto& entry : requested_inputs) {
+        input_holders.emplace(
+            entry.key().toStringRef(),
+            entry.value().toCustomClass<metatomic_torch::ModelOutputHolder>()
+        );
+    }
     // transform from LAMMPS to metatomic System
     auto system = this->system_adaptor->system_from_lmp(
         mta_list,
         static_cast<bool>(vflag_global),
         dtype,
-        mta_data->device
+        mta_data->device,
+        input_holders
     );
 
     // add the required additional inputs
-    this->system_adaptor->add_masses(system, metatomic_torch::unit_conversion_factor("mass", unit_map.at("mass").at(update->unit_style), "u"));
+    this->system_adaptor->add_masses(system, metatomic_torch::unit_conversion_factor(unit_map.at("mass").at(update->unit_style), "u"));
     this->system_adaptor->add_momenta(system, this->momentum_conversion_factor);
 
     // Configure selected atoms for evaluation

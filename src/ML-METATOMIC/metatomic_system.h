@@ -84,7 +84,7 @@ public:
         bool do_virial,
         torch::ScalarType dtype,
         torch::Device device,
-        const std::vector<torch::intrusive_ptr<metatomic_torch::ModelOutputHolder>>& inputs = {}
+        const std::map<std::string, torch::intrusive_ptr<metatomic_torch::ModelOutputHolder>>& inputs = {}
     );
 
     // Add masses as extra data to this system, only for atoms which are not

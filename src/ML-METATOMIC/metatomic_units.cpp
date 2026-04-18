@@ -18,22 +18,6 @@
 
 namespace LAMMPS_NS {
 
-const std::map<std::string, std::string> quantity_map = {
-    {"energy", "energy"},
-    {"energy_ensemble", "energy"},
-    {"energy_uncertainty", "energy"},
-    {"forces", "force"},
-    {"non_conservative_forces", "force"},
-    {"stress", "stress"},
-    {"non_conservative_stress", "stress"},
-    {"masses", "mass"},
-    {"position", "position"},
-    {"momenta", "momentum"},
-    {"velocities", "velocity"},
-    {"charges", "charge"},
-    {"heat_flux", "heat_flux"},
-};
-
 const std::map<std::string, std::map<std::string, std::string>> unit_map = {
     {"mass", {
         {"real", "g/mol"},
