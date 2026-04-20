@@ -69,8 +69,9 @@ struct PairMetatomicData: public CommonMetatomicData {
    metatomic_torch::ModelOutput nc_forces_output;
    metatomic_torch::ModelOutput nc_stress_output;
 
-   // whether non-conservative forces and stresses should be used
-   bool non_conservative = false;
+   // which non-conservative outputs to use
+   enum class NonConservativeMode { OFF, ON, FORCES, STRESS };
+   NonConservativeMode non_conservative = NonConservativeMode::OFF;
 
    // energy key for the model
    std::string energy_key;
