@@ -184,25 +184,25 @@ FixMetatomic::FixMetatomic(LAMMPS *lmp, int narg, char **arg): Fix(lmp, narg, ar
 
     // FlashMD needs position change delta-q and momenta p
     auto positions = torch::make_intrusive<metatomic_torch::ModelOutputHolder>(
-        /*quantity =*/ "length",
+        /*quantity =*/ "",
         /*unit =*/ length_unit,
-        /*per_atom =*/ true,
+        /*sample_kind =*/ "atom",
         /*explicit_gradients =*/ std::vector<std::string>{},
         /*description =*/ ""
     );
     this->mta_data->evaluation_options->outputs.insert("positions", positions);
 
     auto momenta = torch::make_intrusive<metatomic_torch::ModelOutputHolder>(
-        /*quantity =*/ "momentum",
+        /*quantity =*/ "",
         /*unit =*/ "(eV*u)^(1/2)",
-        /*per_atom =*/ true,
+        /*sample_kind =*/ "atom",
         /*explicit_gradients =*/ std::vector<std::string>{},
         /*description =*/ ""
     );
     this->mta_data->evaluation_options->outputs.insert("momenta", momenta);
 
     // dynamic fusion strategy for torch::jit
-    torch::jit::FusionStrategy strategy = {{torch::jit::FusionBehavior::DYNAMIC, 10}};                                                                                                      
+    torch::jit::FusionStrategy strategy = {{torch::jit::FusionBehavior::DYNAMIC, 10}};
     torch::jit::setFusionStrategy(strategy);
 
     // disable some graph optimizations that can actually slow down model inference
@@ -453,9 +453,10 @@ void FixMetatomic::initial_integrate(int /*vflag*/) {
         mta_data->device
     );
 
-    // add the required additional inputs
-    this->system_adaptor->add_masses(system, 1.0);
-    this->system_adaptor->add_momenta(system, this->momentum_conversion_factor);
+    // add the required additional inputs, for now FlashMD uses the old names
+    // and does not go through the requested_inputs mechanism.
+    this->system_adaptor->add_masses(system, "masses", 1.0);
+    this->system_adaptor->add_momenta(system, "momenta", this->momentum_conversion_factor);
 
     // Configure selected atoms for evaluation
     // Only run the calculation for atoms in the current group

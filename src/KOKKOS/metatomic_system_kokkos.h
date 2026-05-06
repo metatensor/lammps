@@ -109,8 +109,8 @@ public:
         torch::Device device
     ) override;
 
-    void add_masses(metatomic_torch::System& system, double unit_conversion) override;
-    void add_momenta(metatomic_torch::System& system, double unit_conversion) override;
+    void add_masses(metatomic_torch::System& system, std::string name, double unit_conversion) override;
+    void add_momenta(metatomic_torch::System& system, std::string name, double unit_conversion) override;
 
     void setup_neighbors_kk(metatomic_torch::System& system, NeighListKokkos<DeviceType>* list);
 
