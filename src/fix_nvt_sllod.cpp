@@ -20,7 +20,6 @@
 
 #include "atom.h"
 #include "comm.h"
-#include "compute.h"
 #include "compute_temp_deform.h"
 #include "domain.h"
 #include "error.h"
@@ -41,9 +40,9 @@ FixNVTSllod::FixNVTSllod(LAMMPS *lmp, int narg, char **arg) :
   FixNH(lmp, narg, arg)
 {
   if (!tstat_flag)
-    error->all(FLERR,"Temperature control must be used with fix nvt/sllod");
+    error->all(FLERR, 2, "Temperature control must be used with fix nvt/sllod");
   if (pstat_flag)
-    error->all(FLERR,"Pressure control can not be used with fix nvt/sllod");
+    error->all(FLERR, 2, "Pressure control can not be used with fix nvt/sllod");
 
   // default values
 
@@ -110,25 +109,30 @@ void FixNVTSllod::init()
     if (integrator == LEGACY) {
       nondeformbias = 1;
       if (kick_flag)
-        error->all(FLERR, "fix {} with peculiar=no and kick=yes requires temperature bias "
+        error->all(FLERR, Error::NOLASTLINE,
+                   "fix {} with peculiar=no and kick=yes requires temperature bias "
                    "to be calculated by compute temp/deform", style);
     } else if (!peculiar_flag) {
-      error->all(FLERR,"Fix {} used with lab-frame velocity and non-deform "
-                     "temperature bias. For non-deform biases, either set peculiar = yes "
-                     "or pass an explicit temp/deform with an extra bias", style);
+      error->all(FLERR, Error::NOLASTLINE, "Fix {} used with lab-frame velocity and non-deform "
+                 "temperature bias. For non-deform biases, either set peculiar = yes "
+                 "or pass an explicit temp/deform with an extra bias", style);
     }
   }
 
   // check fix deform remap settings
 
   auto deform = modify->get_fix_by_style("^deform");
-  if (deform.size() < 1) error->all(FLERR,"Using fix {} with no fix deform defined", style);
+  if (deform.size() < 1)
+    error->all(FLERR, Error::NOLASTLINE, "Using fix {} with no fix deform defined", style);
 
   for (auto &ifix : deform) {
     auto *f = dynamic_cast<FixDeform *>(ifix);
+    // not compatible with fix deform. ignore.
+    if (!f) continue;
     if ((peculiar_flag && f->remapflag != Domain::NO_REMAP) ||
         (!peculiar_flag && f->remapflag != Domain::V_REMAP))
-      error->all(FLERR,"Using fix {} with inconsistent fix {} remap option", style, f->style);
+      error->all(FLERR, Error::NOLASTLINE,
+                 "Using fix {} with inconsistent fix {} remap option", style, f->style);
 
     if (kick_flag) {
       // apply initial kick if velocity stored in lab frame
@@ -137,11 +141,11 @@ void FixNVTSllod::init()
       if (!peculiar_flag) {
         f->init();
         if (comm->me == 0) utils::logmesg(lmp, "fix {} applying velocity profile kick.\n", style);
-        dynamic_cast<ComputeTempDeform*>(temperature)->apply_deform_bias_all();
+        auto *f2 = dynamic_cast<ComputeTempDeform *>(temperature);
+        if (f2) f2->apply_deform_bias_all();
         kick_flag = 0;
       } else if (comm->me == 0) {
-        error->warning(FLERR,"fix {} using peculiar frame velocity. "
-                       "Ignoring kick flag.", style);
+        error->warning(FLERR,"fix {} using peculiar frame velocity. Ignoring kick flag.", style);
       }
     }
 

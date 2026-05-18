@@ -33,7 +33,7 @@ AtomVecKokkos::AtomVecKokkos(LAMMPS *lmp) : AtomVec(lmp)
   kokkosable = 1;
   buffer = nullptr;
   buffer_size = 0;
-  size_exchange = 0;
+  size_exchange = size_exchange_default = size_exchange_bonus = 0;
 
   datamask_grow = datamask_comm = datamask_comm_vel = datamask_reverse =
     datamask_border = datamask_border_vel = datamask_exchange =

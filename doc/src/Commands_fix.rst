@@ -101,6 +101,7 @@ OPT.
    * :doc:`indent <fix_indent>`
    * :doc:`ipi <fix_ipi>`
    * :doc:`lambda/apip <fix_lambda_apip>`
+   * :doc:`lambda/la/csp/apip <fix_lambda_la_csp_apip>`
    * :doc:`lambda_thermostat/apip <fix_lambda_thermostat_apip>`
    * :doc:`langevin (k) <fix_langevin>`
    * :doc:`langevin/drude <fix_langevin_drude>`
