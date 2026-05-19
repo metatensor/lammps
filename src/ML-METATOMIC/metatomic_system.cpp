@@ -661,7 +661,7 @@ metatomic_torch::System MetatomicSystemAdaptor::system_from_lmp(
     return system;
 }
 
-void MetatomicSystemAdaptor::add_masses(metatomic_torch::System& system, std::string name, double unit_conversion) {
+void MetatomicSystemAdaptor::add_masses(metatomic_torch::System& system, double unit_conversion) {
     double* rmass = atom->rmass;
     double* mass = atom->mass;
     int* type = atom->type;
@@ -699,12 +699,11 @@ void MetatomicSystemAdaptor::add_masses(metatomic_torch::System& system, std::st
     masses = masses * unit_conversion;
     auto tensor = make_per_atom_tensormap(masses, dtype, device, "mass");
 
-    assert(name == "mass" || name == "masses");
-    system->add_data(name, tensor);
+    system->add_data("mass", tensor);
 }
 
 
-void MetatomicSystemAdaptor::add_momenta(metatomic_torch::System& system, std::string name, double unit_conversion) {
+void MetatomicSystemAdaptor::add_momenta(metatomic_torch::System& system, double unit_conversion) {
     double* rmass = atom->rmass;
     double* mass = atom->mass;
     double** v = atom->v;
@@ -735,8 +734,7 @@ void MetatomicSystemAdaptor::add_momenta(metatomic_torch::System& system, std::s
     momenta = momenta * unit_conversion;
     auto tensor = make_per_atom_tensormap(momenta, dtype, device, "momentum", {"xyz"});
 
-    assert(name == "momentum" || name == "momenta");
-    system->add_data(name, tensor);
+    system->add_data("momentum", tensor);
 }
 
 void MetatomicSystemAdaptor::add_velocities(metatomic_torch::System& system, double unit_conversion) {
@@ -766,5 +764,5 @@ void MetatomicSystemAdaptor::add_velocities(metatomic_torch::System& system, dou
     velocities = velocities * unit_conversion;
     auto tensor = make_per_atom_tensormap(velocities, dtype, device, "velocity", {"xyz"});
 
-    system->add_data("velocities", tensor, /*override=*/true);
+    system->add_data(std::string{"velocities"}, tensor, /*override=*/true, /*private_warn_on_deprecated=*/true);
 }

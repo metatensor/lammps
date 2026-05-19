@@ -89,7 +89,7 @@ public:
 
     // Add masses as extra data to this system, only for atoms which are not
     // periodic images of other atoms
-    virtual void add_masses(metatomic_torch::System& system, std::string name, double unit_conversion);
+    virtual void add_masses(metatomic_torch::System& system, double unit_conversion);
     // Add momenta as extra data to this system, only for atoms which are not
     // periodic images of other atoms
     virtual void add_momenta(metatomic_torch::System& system, double unit_conversion);
