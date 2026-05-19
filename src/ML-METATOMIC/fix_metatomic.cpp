@@ -175,25 +175,25 @@ FixMetatomic::FixMetatomic(LAMMPS *lmp, int narg, char **arg): Fix(lmp, narg, ar
 
     // FlashMD needs position change delta-q and momenta p
     auto positions = torch::make_intrusive<metatomic_torch::ModelOutputHolder>(
-        /*quantity =*/ "length",
+        /*quantity =*/ "",
         /*unit =*/ length_unit,
-        /*per_atom =*/ true,
+        /*sample_kind =*/ "atom",
         /*explicit_gradients =*/ std::vector<std::string>{},
         /*description =*/ ""
     );
     this->mta_data->evaluation_options->outputs.insert("positions", positions);
 
     auto momenta = torch::make_intrusive<metatomic_torch::ModelOutputHolder>(
-        /*quantity =*/ "momentum",
+        /*quantity =*/ "",
         /*unit =*/ "(eV*u)^(1/2)",
-        /*per_atom =*/ true,
+        /*sample_kind =*/ "atom",
         /*explicit_gradients =*/ std::vector<std::string>{},
         /*description =*/ ""
     );
     this->mta_data->evaluation_options->outputs.insert("momenta", momenta);
 
     // dynamic fusion strategy for torch::jit
-    torch::jit::FusionStrategy strategy = {{torch::jit::FusionBehavior::DYNAMIC, 10}};                                                                                                      
+    torch::jit::FusionStrategy strategy = {{torch::jit::FusionBehavior::DYNAMIC, 10}};
     torch::jit::setFusionStrategy(strategy);
 
     // disable some graph optimizations that can actually slow down model inference

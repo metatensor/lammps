@@ -96,7 +96,7 @@ PairMetatomic::PairMetatomic(LAMMPS *lmp):
     this->manybody_flag = 1;
 
     // dynamic fusion strategy for torch::jit
-    torch::jit::FusionStrategy strategy = {{torch::jit::FusionBehavior::DYNAMIC, 10}};                                                                                                      
+    torch::jit::FusionStrategy strategy = {{torch::jit::FusionBehavior::DYNAMIC, 10}};
     torch::jit::setFusionStrategy(strategy);
 
     // disable some graph optimizations that can actually slow down model inference
@@ -339,24 +339,22 @@ void PairMetatomic::settings(int argc, char ** argv) {
         );
     }
 
-    mta_data->is_energy_output_per_atom = energy_output->value()->per_atom;
+    mta_data->is_energy_output_per_atom = energy_output->value()->sample_kind() == "atom";
     mta_data->energy_output = torch::make_intrusive<metatomic_torch::ModelOutputHolder>();
-    mta_data->energy_output->set_quantity("energy");
     mta_data->energy_output->set_unit(this->energy_unit);
 
     auto uncertainty_output = outputs.find(mta_data->energy_uq_key);
     if (uncertainty_output != outputs.end()) {
-        if (do_uncertainty && uncertainty_output->value()->per_atom) {
+        if (do_uncertainty && (uncertainty_output->value()->sample_kind() == "atom")) {
             // TODO: maybe if there is a global uncertainty output we should use
             // that as a fallback?
 
             mta_data->uncertainty_output = torch::make_intrusive<metatomic_torch::ModelOutputHolder>();
-            mta_data->uncertainty_output->set_quantity("energy");
             mta_data->uncertainty_output->set_unit(this->energy_unit);
-            mta_data->uncertainty_output->per_atom = true;
+            mta_data->uncertainty_output->set_sample_kind("atom");
 
             if (comm->me == 0) {
-                auto message = "Found '{}' output, we will check for atoms with high uncertainty on the energy predictions";
+                constexpr auto message = "Found '{}' output, we will check for atoms with high uncertainty on the energy predictions";
                 if (screen) {
                     fprintf(screen, "%s\n", fmt::format(message, mta_data->energy_uq_key).c_str());
                 }
@@ -377,7 +375,7 @@ void PairMetatomic::settings(int argc, char ** argv) {
             );
         }
 
-        if (!nc_forces->value()->per_atom) {
+        if (nc_forces->value()->sample_kind() != "atom") {
             error->one(FLERR,
                 "the '{}' output of the model at '{}' "
                 "can not produce per-atom output, we can not enable non_conservative simulations",
@@ -385,18 +383,16 @@ void PairMetatomic::settings(int argc, char ** argv) {
             );
         }
         mta_data->nc_forces_output = torch::make_intrusive<metatomic_torch::ModelOutputHolder>();
-        mta_data->nc_forces_output->set_quantity("force");
         mta_data->nc_forces_output->set_unit(this->energy_unit + "/" + this->length_unit);
-        mta_data->nc_forces_output->per_atom = true;
+        mta_data->nc_forces_output->set_sample_kind("atom");
     }
 
     if (do_nc_stress) {
         auto nc_stress = outputs.find(mta_data->nc_stress_key);
         if (nc_stress != outputs.end()) {
             mta_data->nc_stress_output = torch::make_intrusive<metatomic_torch::ModelOutputHolder>();
-            mta_data->nc_stress_output->set_quantity("pressure");
             mta_data->nc_stress_output->set_unit(this->energy_unit + "/" + this->length_unit + "^3");
-            mta_data->nc_stress_output->per_atom = false;
+            mta_data->nc_stress_output->set_sample_kind("system");
         } else {
             mta_data->nc_stress_output = nullptr;
         }
@@ -648,9 +644,9 @@ void PairMetatomic::compute(int eflag, int vflag) {
                     mta_data->model_path
                 );
             }
-            mta_data->energy_output->per_atom = true;
+            mta_data->energy_output->set_sample_kind("atom");
         } else {
-            mta_data->energy_output->per_atom = false;
+            mta_data->energy_output->set_sample_kind("system");
         }
         mta_data->evaluation_options->outputs.insert(mta_data->energy_key, mta_data->energy_output);
     }
@@ -819,7 +815,7 @@ void PairMetatomic::compute(int eflag, int vflag) {
 
             // store the energy returned by the model
             if (eflag_atom) {
-                assert(mta_data->energy_output->per_atom);
+                assert(mta_data->energy_output->sample_kind() == "atom");
                 assert(energy_samples->size() == 2);
                 assert(energy_samples->names()[0] == "system");
                 assert(energy_samples->names()[1] == "atom");
@@ -843,7 +839,7 @@ void PairMetatomic::compute(int eflag, int vflag) {
 
             if (eflag_global) {
                 torch::Tensor global_energy;
-                if (mta_data->energy_output->per_atom) {
+                if (mta_data->energy_output->sample_kind() == "atom") {
                     global_energy = energy_detached.sum(0);
                     assert(energy_detached.sizes() == std::vector<int64_t>({1}));
                 } else {

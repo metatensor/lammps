@@ -33,8 +33,8 @@ using namespace MathConst;
 
 /* ---------------------------------------------------------------------- */
 
-AtomVecEllipsoidKokkos::AtomVecEllipsoidKokkos(LAMMPS *lmp) : AtomVec(lmp),
-AtomVecKokkos(lmp), AtomVecEllipsoid(lmp)
+AtomVecEllipsoidKokkos::AtomVecEllipsoidKokkos(LAMMPS *lmp) :
+    AtomVec(lmp), AtomVecKokkos(lmp), AtomVecEllipsoid(lmp), torque(nullptr)
 {
   size_exchange_bonus = 8;
   datamask_bonus = ELLIPSOID_MASK|BONUS_MASK;
@@ -42,7 +42,7 @@ AtomVecKokkos(lmp), AtomVecEllipsoid(lmp)
   k_nghost_bonus = DAT::tdual_int_scalar("atomEllipKK:k_nghost_bonus");
   k_nlocal_bonus = DAT::tdual_int_scalar("atomEllipKK:k_nlocal_bonus");
 
-  if (sizeof(KK_FLOAT) != sizeof(double))
+  if (((sizeof(KK_FLOAT) != sizeof(double))) && (comm->me == 0))
     error->warning(FLERR,"AtomVecEllipsoidKokkos does not (yet) fully support "
        "KK_FLOAT within bonus struct data (shape, quat). Using double for these fields.");
 }
@@ -944,7 +944,7 @@ void AtomVecEllipsoidKokkos::sync_pinned(ExecutionSpace space, uint64_t mask, in
     if ((mask & V_MASK) && atomKK->k_v.need_sync_device())
       perform_pinned_copy_transform<DAT::ttransform_kkfloat_1d_3>(atomKK->k_v,space,async_flag);
     if ((mask & F_MASK) && atomKK->k_f.need_sync_device())
-      perform_pinned_copy_transform<DAT::ttransform_kkfloat_1d_3>(atomKK->k_f,space,async_flag);
+      perform_pinned_copy_transform<DAT::ttransform_kkacc_1d_3>(atomKK->k_f,space,async_flag);
     if ((mask & TAG_MASK) && atomKK->k_tag.need_sync_device())
       perform_pinned_copy<DAT::tdual_tagint_1d>(atomKK->k_tag,space,async_flag);
     if ((mask & TYPE_MASK) && atomKK->k_type.need_sync_device())
@@ -958,7 +958,7 @@ void AtomVecEllipsoidKokkos::sync_pinned(ExecutionSpace space, uint64_t mask, in
     if ((mask & ANGMOM_MASK) && atomKK->k_angmom.need_sync_device())
       perform_pinned_copy_transform<DAT::ttransform_kkfloat_1d_3>(atomKK->k_angmom,space,async_flag);
     if ((mask & TORQUE_MASK) && atomKK->k_torque.need_sync_device())
-      perform_pinned_copy_transform<DAT::ttransform_kkfloat_1d_3>(atomKK->k_torque,space,async_flag);
+      perform_pinned_copy_transform<DAT::ttransform_kkacc_1d_3>(atomKK->k_torque,space,async_flag);
     if ((mask & ELLIPSOID_MASK) && atomKK->k_ellipsoid.need_sync_device())
       perform_pinned_copy<DAT::tdual_int_1d>(atomKK->k_ellipsoid,space,async_flag);
     if ((mask & BONUS_MASK) && k_bonus.need_sync_device())
@@ -969,7 +969,7 @@ void AtomVecEllipsoidKokkos::sync_pinned(ExecutionSpace space, uint64_t mask, in
     if ((mask & V_MASK) && atomKK->k_v.need_sync_host())
       perform_pinned_copy_transform<DAT::ttransform_kkfloat_1d_3>(atomKK->k_v,space,async_flag);
     if ((mask & F_MASK) && atomKK->k_f.need_sync_host())
-      perform_pinned_copy_transform<DAT::ttransform_kkfloat_1d_3>(atomKK->k_f,space,async_flag);
+      perform_pinned_copy_transform<DAT::ttransform_kkacc_1d_3>(atomKK->k_f,space,async_flag);
     if ((mask & TAG_MASK) && atomKK->k_tag.need_sync_host())
       perform_pinned_copy<DAT::tdual_tagint_1d>(atomKK->k_tag,space,async_flag);
     if ((mask & TYPE_MASK) && atomKK->k_type.need_sync_host())
@@ -983,7 +983,7 @@ void AtomVecEllipsoidKokkos::sync_pinned(ExecutionSpace space, uint64_t mask, in
     if ((mask & ANGMOM_MASK) && atomKK->k_angmom.need_sync_host())
       perform_pinned_copy_transform<DAT::ttransform_kkfloat_1d_3>(atomKK->k_angmom,space,async_flag);
     if ((mask & TORQUE_MASK) && atomKK->k_torque.need_sync_host())
-      perform_pinned_copy_transform<DAT::ttransform_kkfloat_1d_3>(atomKK->k_torque,space,async_flag);
+      perform_pinned_copy_transform<DAT::ttransform_kkacc_1d_3>(atomKK->k_torque,space,async_flag);
     if ((mask & ELLIPSOID_MASK) && atomKK->k_ellipsoid.need_sync_host())
       perform_pinned_copy<DAT::tdual_int_1d>(atomKK->k_ellipsoid,space,async_flag);
     if ((mask & BONUS_MASK) && k_bonus.need_sync_host())

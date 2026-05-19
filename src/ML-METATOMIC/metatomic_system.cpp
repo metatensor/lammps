@@ -322,7 +322,7 @@ void MetatomicSystemAdaptor::guess_periodic_ghosts() {
                 it->second = i;
             } else if (dist_new == dist_old) {
                 // Lexicographic tiebreaker for the rare equal-distance case
-                for (int d = 0; d < 3; d++) {           
+                for (int d = 0; d < 3; d++) {
                     if (x[i][d] < x[it->second][d]) {
                         it->second = i;
                         break;
@@ -661,7 +661,7 @@ metatomic_torch::System MetatomicSystemAdaptor::system_from_lmp(
     return system;
 }
 
-void MetatomicSystemAdaptor::add_masses(metatomic_torch::System& system, double unit_conversion) {
+void MetatomicSystemAdaptor::add_masses(metatomic_torch::System& system, std::string name, double unit_conversion) {
     double* rmass = atom->rmass;
     double* mass = atom->mass;
     int* type = atom->type;
@@ -699,11 +699,12 @@ void MetatomicSystemAdaptor::add_masses(metatomic_torch::System& system, double 
     masses = masses * unit_conversion;
     auto tensor = make_per_atom_tensormap(masses, dtype, device, "mass");
 
-    system->add_data("masses", tensor, /*override=*/true);
+    assert(name == "mass" || name == "masses");
+    system->add_data(name, tensor);
 }
 
 
-void MetatomicSystemAdaptor::add_momenta(metatomic_torch::System& system, double unit_conversion) {
+void MetatomicSystemAdaptor::add_momenta(metatomic_torch::System& system, std::string name, double unit_conversion) {
     double* rmass = atom->rmass;
     double* mass = atom->mass;
     double** v = atom->v;
@@ -734,7 +735,8 @@ void MetatomicSystemAdaptor::add_momenta(metatomic_torch::System& system, double
     momenta = momenta * unit_conversion;
     auto tensor = make_per_atom_tensormap(momenta, dtype, device, "momentum", {"xyz"});
 
-    system->add_data("momenta", tensor, /*override=*/true);
+    assert(name == "momentum" || name == "momenta");
+    system->add_data(name, tensor);
 }
 
 void MetatomicSystemAdaptor::add_velocities(metatomic_torch::System& system, double unit_conversion) {

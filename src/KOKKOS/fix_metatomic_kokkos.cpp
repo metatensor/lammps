@@ -201,9 +201,10 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/) {
         mta_data->device
     );
 
-    // add the required additional inputs
-    this->system_adaptor->add_masses(system, 1.0);
-    this->system_adaptor->add_momenta(system, this->momentum_conversion_factor);
+    // add the required additional inputs, for now FlashMD uses the old names
+    // and does not go through the requested_inputs mechanism.
+    this->system_adaptor->add_masses(system, "masses", 1.0);
+    this->system_adaptor->add_momenta(system, "momenta", this->momentum_conversion_factor);
 
     // Configure selected atoms for evaluation
     // Only run the calculation for atoms in the current group

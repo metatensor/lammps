@@ -91,7 +91,7 @@ diameter relative to the automatically chosen one.  In most use cases a
 value of 0.0 is probably the desired choice.
 
 Restart, fix_modify, output, run start/stop, minimize info
-==========================================================
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
 No information about this fix is written to :doc:`binary restart files
 <restart>`.

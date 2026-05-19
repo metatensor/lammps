@@ -96,7 +96,7 @@ Kokkos::Array<int32_t, 3> cell_shifts(
         cell_inv(2, 0) * pair_shift[0] +
         cell_inv(2, 1) * pair_shift[1] +
         cell_inv(2, 2) * pair_shift[2]
-    )); 
+    ));
     return {shift_a, shift_b, shift_c};
 }
 
@@ -494,7 +494,7 @@ metatomic_torch::System MetatomicSystemAdaptorKokkos<DeviceType>::system_from_lm
 }
 
 template<class DeviceType>
-void MetatomicSystemAdaptorKokkos<DeviceType>::add_masses(metatomic_torch::System& system, double unit_conversion) {
+void MetatomicSystemAdaptorKokkos<DeviceType>::add_masses(metatomic_torch::System& system, std::string name, double unit_conversion) {
     auto rmass = atomKK->k_rmass.view<DeviceType>();
     auto mass = atomKK->k_mass.view<DeviceType>();
     auto type = atomKK->k_type.view<DeviceType>();
@@ -553,12 +553,13 @@ void MetatomicSystemAdaptorKokkos<DeviceType>::add_masses(metatomic_torch::Syste
         std::vector<metatensor_torch::TensorBlock>{block}
     );
 
-    system->add_data("masses", tensor, /*override=*/true);
+    assert(name == "mass" || name == "masses");
+    system->add_data(name, tensor);
 }
 
 
 template<class DeviceType>
-void MetatomicSystemAdaptorKokkos<DeviceType>::add_momenta(metatomic_torch::System& system, double unit_conversion) {
+void MetatomicSystemAdaptorKokkos<DeviceType>::add_momenta(metatomic_torch::System& system, std::string name, double unit_conversion) {
     auto v = atomKK->k_v.view<DeviceType>();
     auto rmass = atomKK->k_rmass.view<DeviceType>();
     auto mass = atomKK->k_mass.view<DeviceType>();
@@ -617,7 +618,8 @@ void MetatomicSystemAdaptorKokkos<DeviceType>::add_momenta(metatomic_torch::Syst
         std::vector<metatensor_torch::TensorBlock>{block}
     );
 
-    system->add_data("momenta", tensor, /*override=*/true);
+    assert(name == "momentum" || name == "momenta");
+    system->add_data(name, tensor);
 }
 
 namespace LAMMPS_NS {

@@ -216,8 +216,8 @@ int ComputeHBondLocal::compute_image(int *&objs, double **&parms)
     numobjs = 0;
     for (int i = 0; i < ncount; ++i) {
       int idonor = atom->map((tagint) alocal[i][DONOR]);
-      int iacceptor = domain->closest_image(idonor, (tagint) atom->map(alocal[i][ACCEPTOR]));
-      int ihydrogen = domain->closest_image(idonor, (tagint) atom->map(alocal[i][HYDROGEN]));
+      int iacceptor = domain->closest_image(idonor, atom->map((tagint) alocal[i][ACCEPTOR]));
+      int ihydrogen = domain->closest_image(idonor, atom->map((tagint) alocal[i][HYDROGEN]));
       if ((idonor < 0) || (iacceptor < 0) || (ihydrogen < 0)) continue;    // paranoia
 
       imgobjs[numobjs] = Graphics::ARROW;

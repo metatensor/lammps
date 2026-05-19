@@ -645,7 +645,7 @@ void Atom::set_atomflag_defaults()
   // identical list as 2nd customization in atom.h
 
   labelmapflag = 0;
-  ellipsoid_flag = line_flag = tri_flag = body_flag = 0;
+  ellipsoid_flag = line_flag = tri_flag = body_flag = superellipsoid_flag = 0;
   quat_flag = 0;
   peri_flag = electron_flag = sph_flag = 0;
   molecule_flag = molindex_flag = molatom_flag = 0;
@@ -822,9 +822,11 @@ AtomVec *Atom::style_match(const std::string &style)
   if (utils::strmatch(atom_style, pattern)) return avec;
   else if (utils::strmatch(atom_style,"^hybrid")) {
     auto *avec_hybrid = dynamic_cast<AtomVecHybrid *>(avec);
-    for (int i = 0; i < avec_hybrid->nstyles; i++) {
-      if (utils::strmatch(avec_hybrid->keywords[i], pattern))
-        return avec_hybrid->styles[i];
+    if (avec_hybrid) {
+      for (int i = 0; i < avec_hybrid->nstyles; i++) {
+        if (utils::strmatch(avec_hybrid->keywords[i], pattern))
+          return avec_hybrid->styles[i];
+      }
     }
   }
   return nullptr;
