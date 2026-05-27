@@ -31,6 +31,7 @@ PairStyle(metatomic_9, PairMetatomic);
 #ifndef LMP_PAIR_METATOMIC_H
 #define LMP_PAIR_METATOMIC_H
 
+#include <memory>
 #include "pair.h"
 
 namespace c10 {
