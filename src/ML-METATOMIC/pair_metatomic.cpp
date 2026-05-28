@@ -38,6 +38,7 @@
 #endif
 
 #include <memory>
+#include <cmath>
 
 #include <metatensor/torch.hpp>
 #include <metatomic/torch.hpp>
@@ -601,6 +602,29 @@ void PairMetatomic::init_style() {
     // the pairs to only include each pair once where needed.
     auto request = neighbor->add_request(this, NeighConst::REQ_FULL | NeighConst::REQ_GHOST);
     request->set_cutoff(mta_data->max_cutoff);
+
+    // Check that neighbor list parameters are sufficient for this cutoff.
+    // Dense systems with large cutoffs can overflow the default one/page
+    // and crash the Kokkos NL builder with SIGFPE.
+    double volume = compute_volume(domain);
+    double density = (volume > 0) ? static_cast<double>(atom->natoms) / volume : 0.0;
+    double cutoff_with_skin = mta_data->max_cutoff + neighbor->skin;
+    int est_neighbors = static_cast<int>(
+        (4.0/3.0) * M_PI * pow(cutoff_with_skin, 3) * density * 2.0
+    );
+    if (est_neighbors > neighbor->oneatom) {
+        // Auto-adjust one/page to avoid SIGFPE in Kokkos NL builder
+        if (comm->me == 0) {
+            error->message(FLERR,
+                "Metatomic model cutoff ({:.4f}) with current density requires "
+                "~{} neighbors per atom; auto-adjusting neigh_modify one/page. "
+                "To set manually, use at least: neigh_modify one {} page {}",
+                mta_data->max_cutoff, est_neighbors,
+                est_neighbors, est_neighbors * 10);
+        }
+        neighbor->oneatom = est_neighbors;
+        neighbor->pgsize = est_neighbors * 10;
+    }
 
     // Translate from the metatomic neighbor lists requests to LAMMPS neighbor
     // lists requests.

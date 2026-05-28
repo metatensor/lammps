@@ -17,6 +17,7 @@
 #include "atom_kokkos.h"
 #include "atom_masks.h"
 #include "comm.h"
+#include "error.h"
 #include "kokkos.h"
 #include "memory_kokkos.h"
 #include "update.h"
@@ -63,6 +64,11 @@ NBinKokkos<DeviceType>::NBinKokkos(LAMMPS *lmp) : NBinStandard(lmp) {
 template<class DeviceType>
 void NBinKokkos<DeviceType>::bin_atoms_setup(int nall)
 {
+  if (mbins <= 0)
+    error->one(FLERR, "Kokkos neighbor list produced zero bins; "
+        "add 'neigh_modify binsize <value>' with a value smaller than "
+        "the shortest box dimension (e.g. half the pair cutoff)");
+
   if (mbins > (int)k_bins.view_device().extent(0)) {
     MemoryKokkos::realloc_kokkos(k_bins,"Neighbor::d_bins",mbins,atoms_per_bin);
     bins = k_bins.view<DeviceType>();

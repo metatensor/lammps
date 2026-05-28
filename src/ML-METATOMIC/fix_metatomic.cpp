@@ -39,9 +39,11 @@
 #include "neigh_list.h"
 #include "neigh_request.h"
 #include "comm.h"
+#include "domain.h"
 
 #include <vector>
 #include <algorithm>
+#include <cmath>
 
 #include <metatomic/torch.hpp>
 #include <metatensor/torch.hpp>
@@ -337,16 +339,34 @@ void FixMetatomic::init() {
         this->system_adaptor->add_nl_request(cutoff, options);
     }
 
-    // HACK: Explicitly set the binsize for the neighbor list if there is no
-    // pair_style that would set it instead.
-    //
-    // Otherwise, the default binsize of box[0] is used, which crashes kokkos
-    // for large-ish boxes (~40A), and slow down the simulation for non-kokkos.
-    if (strcmp(force->pair_style, "none") == 0) {
+    // Check that neighbor list parameters are sufficient for this cutoff.
+    // Dense systems with large cutoffs can overflow the default one/page
+    // and crash the Kokkos NL builder with SIGFPE.
+    if (!neighbor->binsizeflag) {
+        // Keep the existing binsize hack for fix metatomic
         neighbor->binsize_user = 0.5 * mta_data->max_cutoff;
         neighbor->binsizeflag = 1;
     }
-    // END HACK
+
+    double volume = domain->xprd * domain->yprd * domain->zprd;
+    double density = (volume > 0) ? static_cast<double>(atom->natoms) / volume : 0.0;
+    double cutoff_with_skin = mta_data->max_cutoff + neighbor->skin;
+    int est_neighbors = static_cast<int>(
+        (4.0/3.0) * M_PI * pow(cutoff_with_skin, 3) * density * 2.0
+    );
+    if (est_neighbors > neighbor->oneatom) {
+        // Auto-adjust one/page to avoid SIGFPE in Kokkos NL builder
+        if (comm->me == 0) {
+            error->message(FLERR,
+                "Metatomic model cutoff ({:.4f}) with current density requires "
+                "~{} neighbors per atom; auto-adjusting neigh_modify one/page. "
+                "To set manually, use at least: neigh_modify one {} page {}",
+                mta_data->max_cutoff, est_neighbors,
+                est_neighbors, est_neighbors * 10);
+        }
+        neighbor->oneatom = est_neighbors;
+        neighbor->pgsize = est_neighbors * 10;
+    }
 }
 
 void FixMetatomic::pick_device(c10::Device& device, const char* requested) {
