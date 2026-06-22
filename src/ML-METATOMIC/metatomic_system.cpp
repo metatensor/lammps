@@ -646,12 +646,12 @@ metatomic_torch::System MetatomicSystemAdaptor::system_from_lmp(
     for (const auto& [property, input]: inputs) {
         const auto& property_name = property.c_str();
         const auto& unit = input->unit().c_str();
-        if (strcmp(property_name, "masses") == 0) {
+        if (strcmp(property_name, "mass") == 0 || strcmp(property_name, "masses") == 0) {
             add_masses(system, metatomic_torch::unit_conversion_factor(unit_map.at("mass").at(update->unit_style), unit));
-        } else if (strcmp(property_name, "momenta") == 0) {
+        } else if (strcmp(property_name, "momentum") == 0 || strcmp(property_name, "momenta") == 0) {
             const auto& momentum_unit = unit_map.at("mass").at(update->unit_style) + "*" + unit_map.at("velocity").at(update->unit_style);
             add_momenta(system, metatomic_torch::unit_conversion_factor(momentum_unit, unit));
-        } else if (strcmp(property_name, "velocities") == 0) {
+        } else if (strcmp(property_name, "velocity") == 0 || strcmp(property_name, "velocities") == 0) {
             add_velocities(system, metatomic_torch::unit_conversion_factor(unit_map.at("velocity").at(update->unit_style), unit));
         } else {
             error->all(FLERR, "compute metatomic: the model requested an unsupported additional input of '{}'", property_name);
@@ -764,5 +764,5 @@ void MetatomicSystemAdaptor::add_velocities(metatomic_torch::System& system, dou
     velocities = velocities * unit_conversion;
     auto tensor = make_per_atom_tensormap(velocities, dtype, device, "velocity", {"xyz"});
 
-    system->add_data(std::string{"velocities"}, tensor, /*override=*/true, /*private_warn_on_deprecated=*/true);
+    system->add_data(std::string{"velocity"}, tensor, /*override=*/true);
 }

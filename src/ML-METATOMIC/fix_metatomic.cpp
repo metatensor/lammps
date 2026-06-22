@@ -454,10 +454,6 @@ void FixMetatomic::initial_integrate(int /*vflag*/) {
         input_holders
     );
 
-    // add the required additional inputs
-    this->system_adaptor->add_masses(system, metatomic_torch::unit_conversion_factor(unit_map.at("mass").at(update->unit_style), "u"));
-    this->system_adaptor->add_momenta(system, this->momentum_conversion_factor);
-
     // Configure selected atoms for evaluation
     // Only run the calculation for atoms in the current group
     mta_data->selected_atoms_values.resize_({group->count(igroup), 2});
