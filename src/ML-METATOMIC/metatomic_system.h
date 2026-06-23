@@ -58,12 +58,8 @@ struct MetatomicNeighborsData {
     std::vector<std::array<float, 3>> distances_f32;
 };
 
-// Build a per-atom TensorMap from values shaped as [atoms, components...].
-// A property dimension is appended automatically.
 metatensor_torch::TensorMap make_per_atom_tensormap(
     const torch::Tensor& values,
-    const torch::ScalarType& dtype,
-    const torch::Device& device,
     const std::string& property_name,
     const std::vector<std::string>& component_names = {}
 );
@@ -84,7 +80,7 @@ public:
         bool do_virial,
         torch::ScalarType dtype,
         torch::Device device,
-        const std::map<std::string, torch::intrusive_ptr<metatomic_torch::ModelOutputHolder>>& inputs = {}
+        const std::map<std::string, torch::intrusive_ptr<metatomic_torch::ModelOutputHolder>>& requested_inputs = {}
     );
 
     // Add masses as extra data to this system, only for atoms which are not

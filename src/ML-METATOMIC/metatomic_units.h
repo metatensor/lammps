@@ -19,7 +19,7 @@
 
 namespace LAMMPS_NS {
 
-extern const std::map<std::string, std::map<std::string, std::string>> unit_map;
+extern const std::map<std::string, std::map<std::string, std::string>> metatomic_unit_map;
 
 }    // namespace LAMMPS_NS
 

@@ -78,8 +78,8 @@ PairMetatomic::PairMetatomic(LAMMPS *lmp):
     if (strcmp(update->unit_style, "lj") == 0) {
         error->one(FLERR, "unsupported units '{}' for pair metatomic ", update->unit_style);
     }
-    this->length_unit = unit_map.at("position").at(update->unit_style);
-    this->energy_unit = unit_map.at("energy").at(update->unit_style);
+    this->length_unit = metatomic_unit_map.at("position").at(update->unit_style);
+    this->energy_unit = metatomic_unit_map.at("energy").at(update->unit_style);
 
     // we might not be running a pure pair potential,
     // so we can not compute virial as fdotr
@@ -673,7 +673,7 @@ void PairMetatomic::compute(int eflag, int vflag) {
 
     // deal with the model requested inputs
     std::map<std::string, metatomic_torch::ModelOutput> input_holders;
-    auto requested_inputs = mta_data->model->run_method("requested_inputs").toGenericDict();
+    auto requested_inputs = mta_data->model->run_method("requested_inputs", /*use_new_names=*/ true).toGenericDict();
     for (const auto& entry : requested_inputs) {
         input_holders.emplace(
             entry.key().toStringRef(),

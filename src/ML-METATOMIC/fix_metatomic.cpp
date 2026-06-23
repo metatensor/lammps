@@ -62,14 +62,13 @@ FixMetatomic::FixMetatomic(LAMMPS *lmp, int narg, char **arg): Fix(lmp, narg, ar
     }
 
     // Determine unit system for the ML model
-    // Currently only 'metal' units are fully supported for momenta
     if (strcmp(update->unit_style, "lj") == 0) {
         error->all(FLERR, "unsupported units '{}' for fix metatomic", update->unit_style);
     }
-    std::string energy_unit= unit_map.at("energy").at(update->unit_style);
-    std::string length_unit = unit_map.at("position").at(update->unit_style);
-    std::string mass_unit = unit_map.at("mass").at(update->unit_style);
-    std::string velocity_unit = unit_map.at("velocity").at(update->unit_style);
+    std::string energy_unit= metatomic_unit_map.at("energy").at(update->unit_style);
+    std::string length_unit = metatomic_unit_map.at("position").at(update->unit_style);
+    std::string mass_unit = metatomic_unit_map.at("mass").at(update->unit_style);
+    std::string velocity_unit = metatomic_unit_map.at("velocity").at(update->unit_style);
     std::string momentum_unit = mass_unit + "*" + velocity_unit;
     this->momentum_conversion_factor = metatomic_torch::unit_conversion_factor(momentum_unit, "(u*eV)^(1/2)");
 
@@ -438,7 +437,7 @@ void FixMetatomic::initial_integrate(int /*vflag*/) {
 
     // deal with the model requested inputs
     std::map<std::string, metatomic_torch::ModelOutput> input_holders;
-    auto requested_inputs = mta_data->model->run_method("requested_inputs").toGenericDict();
+    auto requested_inputs = mta_data->model->run_method("requested_inputs", /*use_new_names=*/ true).toGenericDict();
     for (const auto& entry : requested_inputs) {
         input_holders.emplace(
             entry.key().toStringRef(),

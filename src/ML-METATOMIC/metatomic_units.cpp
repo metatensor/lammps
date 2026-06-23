@@ -18,7 +18,7 @@
 
 namespace LAMMPS_NS {
 
-const std::map<std::string, std::map<std::string, std::string>> unit_map = {
+const std::map<std::string, std::map<std::string, std::string>> metatomic_unit_map = {
     {"mass", {
         {"real", "g/mol"},
         {"metal", "g/mol"},
@@ -73,22 +73,6 @@ const std::map<std::string, std::map<std::string, std::string>> unit_map = {
         {"micro", "pC"},
         {"nano", "e"}
     }},
-    {"lmp::density", {
-        {"real", ""},
-        {"metal", ""},
-        {"si", ""},
-        {"cgs", ""},
-        {"electron", ""},
-        {"micro", ""},
-        {"nano", ""}
-    }},
-    {"lmp::dipole_moment", {}},
-    {"lmp::dynamic_viscosity", {}},
-    {"lmp::electric_field", {}},
-    {"lmp::pressure", {}},
-    {"lmp::temperature", {}},
-    {"lmp::time", {}},
-    {"lmp::torque", {}},
 };
 // simple struct to hold unit conversion factors for a given unit style
 }    // namespace LAMMPS_NS
