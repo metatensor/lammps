@@ -38,6 +38,7 @@ namespace at {
 namespace LAMMPS_NS {
 class MetatomicSystemAdaptor;
 class FixMetatomicData;
+class Compute;
 
 class FixMetatomic : public Fix {
 public:
@@ -46,6 +47,7 @@ public:
 
     int setmask() override;
     void init() override;
+    void setup(int) override;
 
     // Integration methods for ML-driven dynamics
     void initial_integrate(int) override;  // ML prediction of positions/momenta
@@ -69,6 +71,15 @@ public:
 
     // Mapping from LAMMPS atom types to metatomic model types
     int32_t *type_mapping;
+
+    // FlashMD energy rescaling (paper App. C): p' <- alpha p', with
+    // alpha = sqrt(1 - (E'-E)/K'). The potential energy comes from a
+    // pair_style on top of the fix, read via an internal "compute pe".
+    bool rescale_energy;
+    std::string pe_compute_id;
+    Compute *pe_compute;
+    double rescale_U_old;       // U(q) before the current step
+    double rescale_K_before;    // K(p) fed to the model this step
 
     // Helper class to convert between LAMMPS and metatomic representations
     std::unique_ptr<MetatomicSystemAdaptor> system_adaptor;
