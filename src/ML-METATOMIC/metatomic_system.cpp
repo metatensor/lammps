@@ -209,7 +209,7 @@ static std::array<int32_t, 3> cell_shifts(
     return {shift_a, shift_b, shift_c};
 }
 
-metatensor_torch::TensorMap LAMMPS_NS::make_per_atom_tensormap(
+static metatensor_torch::TensorMap make_per_atom_tensormap(
     const torch::Tensor& values,
     const std::string& property_name,
     const std::vector<std::string>& component_names

@@ -58,12 +58,6 @@ struct MetatomicNeighborsData {
     std::vector<std::array<float, 3>> distances_f32;
 };
 
-metatensor_torch::TensorMap make_per_atom_tensormap(
-    const torch::Tensor& values,
-    const std::string& property_name,
-    const std::vector<std::string>& component_names = {}
-);
-
 class MetatomicSystemAdaptor : public Pointers {
 public:
     MetatomicSystemAdaptor(LAMMPS *lmp, MetatomicSystemOptions options);
