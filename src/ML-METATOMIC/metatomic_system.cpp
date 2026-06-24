@@ -706,7 +706,7 @@ void MetatomicSystemAdaptor::add_masses(metatomic_torch::System& system, double 
     masses = masses.index_select(0, mta_to_lmp_tensor);
     masses = masses * unit_conversion;
     masses = masses.to(device);
-    auto tensor = make_per_atom_tensormap(masses, "mass");
+    auto tensor = make_per_atom_tensormap(masses, "mass", std::vector<std::string>({}));
 
     system->add_data("mass", tensor);
 }
