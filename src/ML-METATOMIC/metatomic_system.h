@@ -16,6 +16,7 @@
 
 #include <vector>
 #include <array>
+#include <string>
 
 #include "pointers.h"
 #include "pair.h"
@@ -72,15 +73,19 @@ public:
         NeighList* list,
         bool do_virial,
         torch::ScalarType dtype,
-        torch::Device device
+        torch::Device device,
+        const std::map<std::string, torch::intrusive_ptr<metatomic_torch::ModelOutputHolder>>& requested_inputs = {}
     );
 
     // Add masses as extra data to this system, only for atoms which are not
     // periodic images of other atoms
-    virtual void add_masses(metatomic_torch::System& system, std::string name, double unit_conversion);
+    virtual void add_masses(metatomic_torch::System& system, double unit_conversion);
     // Add momenta as extra data to this system, only for atoms which are not
     // periodic images of other atoms
-    virtual void add_momenta(metatomic_torch::System& system, std::string name, double unit_conversion);
+    virtual void add_momenta(metatomic_torch::System& system, double unit_conversion);
+    // Add velocities as extra data to this system, only for atoms which are not
+    // periodic images of other atoms
+    virtual void add_velocities(metatomic_torch::System& system, double unit_conversion);
 
     // Explicit strain for virial calculations. This uses the same dtype/device
     // as LAMMPS data (positions, …)

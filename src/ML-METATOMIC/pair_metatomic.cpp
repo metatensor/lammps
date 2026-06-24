@@ -37,13 +37,16 @@
     #include <torch/mps.h>
 #endif
 
+#include <map>
 #include <memory>
+#include <string>
 
 #include <metatensor/torch.hpp>
 #include <metatomic/torch.hpp>
 
 #include "metatomic_system.h"
 #include "metatomic_timer.h"
+#include "metatomic_units.h"
 
 using namespace LAMMPS_NS;
 
@@ -72,21 +75,11 @@ PairMetatomic::PairMetatomic(LAMMPS *lmp):
     system_adaptor(nullptr),
     scale(1.0)
 {
-    if (strcmp(update->unit_style, "real") == 0) {
-        this->length_unit = "angstrom";
-        this->energy_unit = "kcal/mol";
-    } else if (strcmp(update->unit_style, "metal") == 0) {
-        this->length_unit = "angstrom";
-        this->energy_unit = "eV";
-    } else if (strcmp(update->unit_style, "si") == 0) {
-        this->length_unit = "meter";
-        this->energy_unit = "joule";
-    } else if (strcmp(update->unit_style, "electron") == 0) {
-        this->length_unit = "Bohr";
-        this->energy_unit = "Hartree";
-    } else {
+    if (strcmp(update->unit_style, "lj") == 0) {
         error->one(FLERR, "unsupported units '{}' for pair metatomic ", update->unit_style);
     }
+    this->length_unit = metatomic_unit_map.at("position").at(update->unit_style);
+    this->energy_unit = metatomic_unit_map.at("energy").at(update->unit_style);
 
     // we might not be running a pure pair potential,
     // so we can not compute virial as fdotr
@@ -678,12 +671,23 @@ void PairMetatomic::compute(int eflag, int vflag) {
         error->one(FLERR, "the model requested an unsupported dtype '{}'", mta_data->capabilities->dtype());
     }
 
+    // deal with the model requested inputs
+    std::map<std::string, metatomic_torch::ModelOutput> input_holders;
+    auto requested_inputs = mta_data->model->run_method("requested_inputs", /*use_new_names=*/ true).toGenericDict();
+    for (const auto& entry : requested_inputs) {
+        input_holders.emplace(
+            entry.key().toStringRef(),
+            entry.value().toCustomClass<metatomic_torch::ModelOutputHolder>()
+        );
+    }
+
     // transform from LAMMPS to metatomic System
     auto system = this->system_adaptor->system_from_lmp(
         mta_list,
         vflag_global && !do_nc_stress,
         dtype,
-        mta_data->device
+        mta_data->device,
+        input_holders
     );
 
     // only run the calculation for atoms actually in the current domain

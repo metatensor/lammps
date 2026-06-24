@@ -25,6 +25,7 @@
 ------------------------------------------------------------------------- */
 #include "metatomic_types.h"
 #include "metatomic_system.h"
+#include "metatomic_units.h"
 
 #include "fix_metatomic.h"
 
@@ -61,26 +62,15 @@ FixMetatomic::FixMetatomic(LAMMPS *lmp, int narg, char **arg): Fix(lmp, narg, ar
     }
 
     // Determine unit system for the ML model
-    // Currently only 'metal' units are fully supported for momenta
-    std::string energy_unit;
-    std::string length_unit;
-    if (strcmp(update->unit_style, "metal") == 0) {
-        length_unit = "angstrom";
-        this->momentum_conversion_factor = 10.1805057179 / 1000.0;
-    } else if (strcmp(update->unit_style, "real") == 0) {
-        length_unit = "angstrom";
-        this->momentum_conversion_factor = 10.1805057179;
-    } else if (strcmp(update->unit_style, "si") == 0) {
-        length_unit = "m";
-        this->momentum_conversion_factor = 10.1805057179 / 1.6605390666e-22;
-    } else {
+    if (strcmp(update->unit_style, "lj") == 0) {
         error->all(FLERR, "unsupported units '{}' for fix metatomic", update->unit_style);
     }
-
-    // For now, only metal units are fully tested and supported
-    if (strcmp(update->unit_style, "metal") != 0) {
-        error->all(FLERR, "fix metatomic currently only supports 'metal' units");
-    }
+    std::string energy_unit= metatomic_unit_map.at("energy").at(update->unit_style);
+    std::string length_unit = metatomic_unit_map.at("position").at(update->unit_style);
+    std::string mass_unit = metatomic_unit_map.at("mass").at(update->unit_style);
+    std::string velocity_unit = metatomic_unit_map.at("velocity").at(update->unit_style);
+    std::string momentum_unit = mass_unit + "*" + velocity_unit;
+    this->momentum_conversion_factor = metatomic_torch::unit_conversion_factor(momentum_unit, "(u*eV)^(1/2)");
 
     if (narg < 4) {
         error->all(FLERR,
@@ -445,18 +435,23 @@ void FixMetatomic::initial_integrate(int /*vflag*/) {
         error->all(FLERR, "the model requested an unsupported dtype '{}'", mta_data->capabilities->dtype());
     }
 
+    // deal with the model requested inputs
+    std::map<std::string, metatomic_torch::ModelOutput> input_holders;
+    auto requested_inputs = mta_data->model->run_method("requested_inputs", /*use_new_names=*/ true).toGenericDict();
+    for (const auto& entry : requested_inputs) {
+        input_holders.emplace(
+            entry.key().toStringRef(),
+            entry.value().toCustomClass<metatomic_torch::ModelOutputHolder>()
+        );
+    }
     // transform from LAMMPS to metatomic System
     auto system = this->system_adaptor->system_from_lmp(
         mta_list,
         static_cast<bool>(vflag_global),
         dtype,
-        mta_data->device
+        mta_data->device,
+        input_holders
     );
-
-    // add the required additional inputs, for now FlashMD uses the old names
-    // and does not go through the requested_inputs mechanism.
-    this->system_adaptor->add_masses(system, "masses", 1.0);
-    this->system_adaptor->add_momenta(system, "momenta", this->momentum_conversion_factor);
 
     // Configure selected atoms for evaluation
     // Only run the calculation for atoms in the current group
