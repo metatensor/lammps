@@ -115,7 +115,9 @@ template<class DeviceType>
 void PairMetatomicKokkos<DeviceType>::store_forces(const at::Tensor& forces_tensor) {
     using NCMode = PairMetatomicData::NonConservativeMode;
     assert(forces_tensor.scalar_type() == torch::kFloat64);
-    auto forces = forces_tensor.contiguous();
+    auto forces = forces_tensor.to(torch::TensorOptions()
+        .dtype(torch::kFloat64)
+        .device(KokkosDeviceToTorch<DeviceType>::convert())).contiguous();
 
     auto forces_lammps_kk = this->atomKK->k_f.template view<DeviceType>();
     auto forces_mta_kk = UnmanagedView<double**, DeviceType>(
@@ -152,6 +154,8 @@ void PairMetatomicKokkos<DeviceType>::store_forces(const at::Tensor& forces_tens
             }
         );
     }
+
+    atomKK->modified(execution_space, F_MASK);
 }
 
 

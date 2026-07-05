@@ -720,8 +720,10 @@ void PairMetatomic::compute(int eflag, int vflag) {
 
     auto results = results_ivalue.toGenericDict();
 
-    // check the max uncertainty
-    if (mta_data->uncertainty_output != nullptr) {
+    // check the max uncertainty (only when the energy was actually requested: in
+    // non-conservative mode on steps without energy output, the model does not
+    // compute the energy or its uncertainty, so `energy_uq_key` is absent).
+    if (mta_data->uncertainty_output != nullptr && (eflag_either || !mta_data->non_conservative)) {
         auto uncertainty = results.at(mta_data->energy_uq_key).toCustomClass<metatensor_torch::TensorMapHolder>();
         auto uncertainty_block = metatensor_torch::TensorMapHolder::block_by_id(uncertainty, 0);
         assert(uncertainty_block->values().sizes().size() == 2);
