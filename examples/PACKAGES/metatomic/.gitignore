@@ -3,3 +3,7 @@ nickel-lj-extensions.pt
 
 flashmd-energy-model.pt
 flashmd-dynamics-model.pt
+
+collected-heat-flux-extensions/
+
+dump.compute_metatomic

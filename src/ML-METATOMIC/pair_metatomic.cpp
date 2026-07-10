@@ -46,7 +46,7 @@
 
 #include "metatomic_system.h"
 #include "metatomic_timer.h"
-#include "metatomic_units.h"
+#include "metatomic_quantities.h"
 
 using namespace LAMMPS_NS;
 

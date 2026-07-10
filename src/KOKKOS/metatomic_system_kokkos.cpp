@@ -19,7 +19,7 @@
 #include "metatomic_system_kokkos.h"
 #include "memory_kokkos.h"
 #include "metatomic_timer.h"
-#include "metatomic_units.h"
+#include "metatomic_quantities.h"
 
 #include "atom_masks.h"
 #include "atom_kokkos.h"
