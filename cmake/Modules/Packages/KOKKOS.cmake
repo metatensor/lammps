@@ -93,8 +93,8 @@ if(DOWNLOAD_KOKKOS)
   list(APPEND KOKKOS_LIB_BUILD_ARGS "-DCMAKE_CXX_EXTENSIONS=${CMAKE_CXX_EXTENSIONS}")
   list(APPEND KOKKOS_LIB_BUILD_ARGS "-DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}")
   include(ExternalProject)
-  set(KOKKOS_URL "https://github.com/kokkos/kokkos/archive/5.0.2.tar.gz" CACHE STRING "URL for KOKKOS tarball")
-  set(KOKKOS_SHA256 "d826f2e0bf1bc3515b4887e3a2594c7fb7a2b5b005dd8798242a8fd1953a9a21" CACHE STRING "SHA256 checksum of KOKKOS tarball")
+  set(KOKKOS_URL "https://github.com/kokkos/kokkos/archive/5.1.0.tar.gz" CACHE STRING "URL for KOKKOS tarball")
+  set(KOKKOS_SHA256 "66b2526569a70a21b2aeaed8dbb1cbe8b475f3c33719eac13bc7eed02e8c6590" CACHE STRING "SHA256 checksum of KOKKOS tarball")
   mark_as_advanced(KOKKOS_URL)
   mark_as_advanced(KOKKOS_SHA256)
   GetFallbackURL(KOKKOS_URL KOKKOS_FALLBACK)
@@ -119,7 +119,7 @@ if(DOWNLOAD_KOKKOS)
   add_dependencies(LAMMPS::KOKKOSCORE kokkos_build)
   add_dependencies(LAMMPS::KOKKOSCONTAINERS kokkos_build)
 elseif(EXTERNAL_KOKKOS)
-  find_package(Kokkos 5.0.2 REQUIRED CONFIG)
+  find_package(Kokkos 5.1.0 REQUIRED CONFIG)
   target_link_libraries(lammps PRIVATE Kokkos::kokkos)
 else()
   set(LAMMPS_LIB_KOKKOS_SRC_DIR ${LAMMPS_LIB_SOURCE_DIR}/kokkos)
@@ -159,12 +159,15 @@ set(KOKKOS_PKG_SOURCES ${KOKKOS_PKG_SOURCES_DIR}/kokkos.cpp
                        ${KOKKOS_PKG_SOURCES_DIR}/neigh_list_kokkos.cpp
                        ${KOKKOS_PKG_SOURCES_DIR}/neigh_bond_kokkos.cpp
                        ${KOKKOS_PKG_SOURCES_DIR}/fix_nh_kokkos.cpp
+                       ${KOKKOS_PKG_SOURCES_DIR}/fix_nh_sphere_kokkos.cpp
                        ${KOKKOS_PKG_SOURCES_DIR}/nbin_kokkos.cpp
                        ${KOKKOS_PKG_SOURCES_DIR}/npair_kokkos.cpp
                        ${KOKKOS_PKG_SOURCES_DIR}/npair_halffull_kokkos.cpp
                        ${KOKKOS_PKG_SOURCES_DIR}/domain_kokkos.cpp
                        ${KOKKOS_PKG_SOURCES_DIR}/modify_kokkos.cpp
-                       ${KOKKOS_PKG_SOURCES_DIR}/rand_pool_wrap_kokkos.cpp)
+                       ${KOKKOS_PKG_SOURCES_DIR}/rand_pool_wrap_kokkos.cpp
+                       ${KOKKOS_PKG_SOURCES_DIR}/tune_kokkos.cpp)
+
 
 # fix wall/gran has been refactored in an incompatible way. Use old version of base class for now
 if(PKG_GRANULAR)
@@ -214,6 +217,11 @@ if(PKG_KSPACE)
       target_link_libraries(lammps PRIVATE nvpl::fftw)
   endif()
   target_compile_definitions(lammps PRIVATE -DFFT_KOKKOS_${FFT_KOKKOS})
+  if((FFT_KOKKOS STREQUAL "FFTW3") OR (FFT_KOKKOS STREQUAL "NVPL"))
+    if(FFT_FFTW_THREADS)
+      target_compile_definitions(lammps PRIVATE -DFFT_KOKKOS_FFTW_THREADS)
+    endif()
+  endif()
 endif()
 
 if(PKG_ML-IAP)

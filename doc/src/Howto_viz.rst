@@ -223,16 +223,50 @@ the color is assigned to atom (or bond) types and uses a default map
 with six colors as follows:
 
 * type 1 = red
-* type 2 = green
+* type 2 = forestgreen
 * type 3 = blue
-* type 4 = yellow
+* type 4 = gold
 * type 5 = cyan
 * type 6 = magenta
+* type 7 = silver
+* type 8 = orange
+* type 9 = lime
+* type 10 = gray
+* type 11 = darkred
+* type 12 = darkgreen
+* type 13 = darkblue
+* type 14 = darkcyan
+* type 15 = darkmagenta
+* type 16 = darkgray
 
-and repeats itself for types :math:`> 6`.  This mapping can be changed by the
-"dump_modify acolor" command, though.  If you want to change the color of a
-specific atom type, you can use :doc:`dump modify acolor <dump_image>`.  For
-example to color atoms of type 1 in gray and type 2 in white, you would use:
+
+.. |color_red| image:: img/colors/red.png
+.. |color_forestgreen| image:: img/colors/forestgreen.png
+.. |color_blue| image:: img/colors/blue.png
+.. |color_gold| image:: img/colors/gold.png
+.. |color_cyan| image:: img/colors/cyan.png
+.. |color_magenta| image:: img/colors/magenta.png
+.. |color_silver| image:: img/colors/silver.png
+.. |color_orange| image:: img/colors/orange.png
+.. |color_lime| image:: img/colors/lime.png
+.. |color_gray| image:: img/colors/gray.png
+.. |color_darkred| image:: img/colors/darkred.png
+.. |color_darkgreen| image:: img/colors/darkgreen.png
+.. |color_darkblue| image:: img/colors/darkblue.png
+.. |color_darkcyan| image:: img/colors/darkcyan.png
+.. |color_darkmagenta| image:: img/colors/darkmagenta.png
+.. |color_darkgray| image:: img/colors/darkgray.png
+
+and repeats itself for types > 16. The default color sequence is thus:
+|color_red|       |color_forestgreen|  |color_blue|         |color_gold|
+|color_cyan|      |color_magenta|      |color_silver|       |color_orange|
+|color_lime|      |color_gray|         |color_darkred|      |color_darkgreen|
+|color_darkblue|  |color_darkcyan|     |color_darkmagenta|  |color_darkgray|
+
+This mapping can be changed by the "dump_modify acolor" command, though.
+If you want to change the color of a specific atom type, you can use
+:doc:`dump modify acolor <dump_image>`.  For example to color atoms of
+type 1 in gray and type 2 in white, you would use:
 
 .. code-block:: LAMMPS
 
@@ -291,9 +325,47 @@ the charge:
 
 .. raw:: html
 
-   <center>(Different colorization styles. Left to right: by default
+   <center>(Different colorization settings. Left to right: by default
    type map, by custom type map, by element, and by charge. Click to see
-   the full-size images)</center>
+   the full-size images)</center><br>
+
+.. versionchanged:: 4Jul2026
+
+Similar color selections are available for coloring bonds. The available
+options are: *type*, *atom*, *c_ID* (or *c_ID[I]*), and *none*.  With
+*type* the bonds are colored by having a color assigned to each bond
+type which follows the same color sequence as for atoms but can be set
+for each bond type independent from atom types.  When using the *atom*
+selection the bond color follows the color of the atoms.  Bonds are
+drawn in two pieces as a cylinder from the center of the bond to each of
+the atoms. Thus if two atoms have different color, the bond also as two
+parts with different colors with this setting.  If the a compute
+reference is used (e.g. *c_ID* or *c_ID[I]*) the bond color is taken
+from a colormap and the color depends on the value of the compute for
+the given bond.  An input example for coloring bonds by the force
+magnitude is given below. When the bond color argument is *none*, no
+bonds are drawn.
+
+.. code-block:: LAMMPS
+
+   compute  bforce peptide bond/local force
+   dump     viz    peptide image 100 myimage-*.png element type bond c_bforce type
+
+.. |bcolors1| image:: img/bondcolor-type.png
+   :width: 24%
+.. |bcolors2| image:: img/bondcolor-element.png
+   :width: 24%
+.. |bcolors3| image:: img/bondcolor-mapforce.png
+   :width: 24%
+.. |bcolors4| image:: img/bondcolor-none.png
+   :width: 24%
+
+|bcolors1|  |bcolors2|  |bcolors3|  |bcolors4|
+
+.. raw:: html
+
+   <center>(Different bond colorization settings. Left to right: by type, by element,
+   by bond force, and no bonds. Click to see the full-size images)</center>
 
 --------------------
 
@@ -812,13 +884,16 @@ and fix styles:
 .. table_from_list::
    :columns: 4
 
+   * :doc:`compute chunk/atom <compute_chunk_atom>`
    * :doc:`compute hbond/local <compute_hbond_local>`
    * :doc:`fix graphics/arrows <fix_graphics_arrows>`
+   * :doc:`fix graphics/chunk <fix_graphics_chunk>`
    * :doc:`fix graphics/isosurface <fix_graphics_isosurface>`
    * :doc:`fix graphics/labels <fix_graphics_labels>`
    * :doc:`fix graphics/lines <fix_graphics_lines>`
    * :doc:`fix graphics/objects <fix_graphics_objects>`
    * :doc:`fix graphics/periodic <fix_graphics_periodic>`
+   * :doc:`fix graphics/replica <fix_graphics_replica>`
    * :doc:`fix atom/swap <fix_atom_swap>`
    * :doc:`fix bond/break <fix_bond_break>`
    * :doc:`fix bond/create <fix_bond_create>`
@@ -829,6 +904,7 @@ and fix styles:
    * :doc:`fix indent <fix_indent>`
    * :doc:`fix reaxff/bonds <fix_reaxff_bonds>`
    * :doc:`fix smd/wall_surface <fix_smd_wall_surface>`
+   * :doc:`fix surface/global <fix_surface_global>`
    * :doc:`fix wall/body/polygon <fix_wall_body_polygon>`
    * :doc:`fix wall/body/polyhedron <fix_wall_body_polyhedron>`
    * :doc:`fix wall/ees <fix_wall_ees>`
@@ -984,14 +1060,9 @@ and a transparent white triangle surface to represent those molecules.
           fcolor membrane darkgreen ftrans membrane 1.0 ftrans water 0.5 &
           element H H H H H H H H H C C C C C C C C C C C C C N N N N N N N O O O O S S &
                   H H H H H C C C C C C N O O O P Cl Na H H H N C C C C C C C C C C C &
-          adiam 1 1.92 adiam 2 1.92 adiam 3 1.92 adiam 5 1.92 adiam 6 1.92 adiam 7 1.92 adiam 8 1.92 &
-          adiam 9 1.92 adiam 10 2.72 adiam 11 2.72 adiam 12 2.72 adiam 13 2.72 adiam 14 2.72 &
-          adiam 15 2.72 adiam 16 2.72 adiam 17 2.72 adiam 18 2.72 adiam 19 2.72 adiam 20 2.72 &
-          adiam 21 2.72 adiam 22 2.72 adiam 23 2.48 adiam 24 2.48 adiam 25 2.48 adiam 26 2.48 &
-          adiam 27 2.48 adiam 28 2.48 adiam 29 2.48 adiam 30 2.432 adiam 31 2.432 adiam 32 2.432 &
-          adiam 34 2.88 adiam 35 2.88 adiam 52 3.632 adiam 53 2.176 adiam 54 1.92 adiam 55 1.92 &
-          adiam 56 1.92 adiam 57 2.48 adiam 58 2.72 adiam 59 2.72 adiam 60 2.72 adiam 61 2.72 &
-          adiam 62 2.72 adiam 63 2.72 adiam 64 2.72 adiam 65 2.72 adiam 66 2.72 adiam 67 2.72 adiam 68 2.72
+          adiam 1*9 1.92 adiam 10*22 2.72 adiam 23*29 2.48 adiam 30*33 2.432 adiam 34*35 2.88 &
+          adiam 36*40 1.92 adiam 41*46 2.72 adiam 47 2.48 adiam 48*50 2.432 adiam 51 2.88 &
+          adiam 52 3.632 adiam 53 2.176 adiam 54*56 1.92 adiam 57 2.48 adiam 58*68 2.72
 
 .. |isosurface1| image:: img/rhodo-all.png
    :width: 49%

@@ -28,9 +28,11 @@
 #include "random_mars.h"
 #include "version.h"
 
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <cstring>
+#include <unordered_map>
 
 #ifdef LAMMPS_JPEG
 #include <jpeglib.h>
@@ -49,8 +51,6 @@ using MathConst::MY_PI4;
 
 // clang-format on
 namespace {
-constexpr int NCOLORS = 140;
-constexpr int NELEMENTS = 109;
 constexpr double EPSILON = 1.0e-6;
 constexpr double TRANS_DELTA = 0.01;
 
@@ -200,16 +200,16 @@ void scale_pixmap(int ow, int oh, const unsigned char *opix, int nw, int nh, uns
 
       // interpolate R, G, and B channels separately with bilinear scaling
       npix[i * 3 * nw + 3 * j] =
-          (unsigned char) (a[0] * (1 - x_diff) * (1 - y_diff) + b[0] * (x_diff) * (1 - y_diff) +
-                           c[0] * (y_diff) * (1 - x_diff) + d[0] * (x_diff * y_diff));
+          (unsigned char) (a[0] * (1 - x_diff) * (1 - y_diff) + b[0] * x_diff * (1 - y_diff) +
+                           c[0] * y_diff * (1 - x_diff) + d[0] * (x_diff * y_diff));
 
       npix[i * 3 * nw + 3 * j + 1] =
-          (unsigned char) (a[1] * (1 - x_diff) * (1 - y_diff) + b[1] * (x_diff) * (1 - y_diff) +
-                           c[1] * (y_diff) * (1 - x_diff) + d[1] * (x_diff * y_diff));
+          (unsigned char) (a[1] * (1 - x_diff) * (1 - y_diff) + b[1] * x_diff * (1 - y_diff) +
+                           c[1] * y_diff * (1 - x_diff) + d[1] * (x_diff * y_diff));
 
       npix[i * 3 * nw + 3 * j + 2] =
-          (unsigned char) (a[2] * (1 - x_diff) * (1 - y_diff) + b[2] * (x_diff) * (1 - y_diff) +
-                           c[2] * (y_diff) * (1 - x_diff) + d[2] * (x_diff * y_diff));
+          (unsigned char) (a[2] * (1 - x_diff) * (1 - y_diff) + b[2] * x_diff * (1 - y_diff) +
+                           c[2] * y_diff * (1 - x_diff) + d[2] * (x_diff * y_diff));
     }
   }
 }
@@ -344,13 +344,15 @@ constexpr char letter_z[] = {
 
 /* ---------------------------------------------------------------------- */
 
+// clang-format on
+
 Image::Image(LAMMPS *lmp, int nmap_caller) :
-  Pointers(lmp), maps(nullptr), depthBuffer(nullptr), surfaceBuffer(nullptr), depthcopy(nullptr),
-  surfacecopy(nullptr), imageBuffer(nullptr), rgbcopy(nullptr), writeBuffer(nullptr),
-  recvcounts(nullptr), displs(nullptr), username(nullptr), userrgb(nullptr), random(nullptr)
+    Pointers(lmp), maps(nullptr), depthBuffer(nullptr), surfaceBuffer(nullptr), depthcopy(nullptr),
+    surfacecopy(nullptr), imageBuffer(nullptr), rgbcopy(nullptr), writeBuffer(nullptr),
+    recvcounts(nullptr), displs(nullptr), random(nullptr)
 {
-  MPI_Comm_rank(world,&me);
-  MPI_Comm_size(world,&nprocs);
+  MPI_Comm_rank(world, &me);
+  MPI_Comm_size(world, &nprocs);
 
   // defaults for 3d viz
 
@@ -368,54 +370,250 @@ Image::Image(LAMMPS *lmp, int nmap_caller) :
 
   // colors
 
-  ncolors = 0;
-  boxcolor = color2rgb("yellow");
   background[0] = background[1] = background[2] = 0.0;
   background2[0] = background2[1] = background2[2] = -1.0;
 
-  // define nmap colormaps, all with default settings
-
-  nmap = nmap_caller;
-  maps = new ColorMap*[nmap];
-  for (int i = 0; i < nmap; i++)
-    maps[i] = new ColorMap(lmp,this);
-
   // static parameters
 
-  FOV = MY_PI/6.0;              // 30 degrees
+  FOV = MY_PI / 6.0;    // 30 degrees
   ambientColor[0] = 0.0;
   ambientColor[1] = 0.0;
   ambientColor[2] = 0.0;
 
-  keyLightPhi = -MY_PI4;        // -45 degrees
-  keyLightTheta = MY_PI/6.0;    // 30 degrees
+  keyLightPhi = -MY_PI4;          // -45 degrees
+  keyLightTheta = MY_PI / 6.0;    // 30 degrees
   keyLightColor[0] = 0.9;
   keyLightColor[1] = 0.9;
   keyLightColor[2] = 0.9;
 
-  fillLightPhi = MY_PI/6.0;     // 30 degrees
+  fillLightPhi = MY_PI / 6.0;    // 30 degrees
   fillLightTheta = 0;
   fillLightColor[0] = 0.45;
   fillLightColor[1] = 0.45;
   fillLightColor[2] = 0.45;
 
-  backLightPhi = MY_PI;         // 180 degrees
-  backLightTheta = MY_PI/12.0;  // 15 degrees
+  backLightPhi = MY_PI;             // 180 degrees
+  backLightTheta = MY_PI / 12.0;    // 15 degrees
   backLightColor[0] = 0.9;
   backLightColor[1] = 0.9;
   backLightColor[2] = 0.9;
+
+  // named colors
+  rgbcolors = {{"aliceblue", {0.941, 0.973, 1.000}},
+               {"antiquewhite", {0.980, 0.922, 0.843}},
+               {"aqua", {0.000, 1.000, 1.000}},
+               {"aquamarine", {0.498, 1.000, 0.831}},
+               {"azure", {0.941, 1.000, 1.000}},
+               {"beige", {0.961, 0.961, 0.863}},
+               {"bisque", {1.000, 0.894, 0.769}},
+               {"black", {0.000, 0.000, 0.000}},
+               {"blanchedalmond", {1.000, 1.000, 0.804}},
+               {"blue", {0.000, 0.000, 1.000}},
+               {"blueviolet", {0.541, 0.169, 0.886}},
+               {"brown", {0.647, 0.165, 0.165}},
+               {"burlywood", {0.871, 0.722, 0.529}},
+               {"cadetblue", {0.373, 0.620, 0.627}},
+               {"chartreuse", {0.498, 1.000, 0.000}},
+               {"chocolate", {0.824, 0.412, 0.118}},
+               {"coral", {1.000, 0.498, 0.314}},
+               {"cornflowerblue", {0.392, 0.584, 0.929}},
+               {"cornsilk", {1.000, 0.973, 0.863}},
+               {"crimson", {0.863, 0.078, 0.235}},
+               {"cyan", {0.000, 1.000, 1.000}},
+               {"darkblue", {0.000, 0.000, 0.545}},
+               {"darkcyan", {0.000, 0.545, 0.545}},
+               {"darkgoldenrod", {0.722, 0.525, 0.043}},
+               {"darkgray", {0.271, 0.271, 0.271}},
+               {"darkgreen", {0.000, 0.392, 0.000}},
+               {"darkkhaki", {0.741, 0.718, 0.420}},
+               {"darkmagenta", {0.545, 0.000, 0.545}},
+               {"darkolivegreen", {0.333, 0.420, 0.184}},
+               {"darkorange", {0.545, 0.271, 0.000}},
+               {"darkorchid", {0.600, 0.196, 0.800}},
+               {"darkred", {0.545, 0.000, 0.000}},
+               {"darksalmon", {0.914, 0.588, 0.478}},
+               {"darkseagreen", {0.561, 0.737, 0.561}},
+               {"darkslateblue", {0.282, 0.239, 0.545}},
+               {"darkslategray", {0.184, 0.310, 0.310}},
+               {"darkturquoise", {0.000, 0.808, 0.820}},
+               {"darkviolet", {0.580, 0.000, 0.827}},
+               {"deeppink", {1.000, 0.078, 0.576}},
+               {"deepskyblue", {0.000, 0.749, 1.000}},
+               {"dimgray", {0.412, 0.412, 0.412}},
+               {"dodgerblue", {0.118, 0.565, 1.000}},
+               {"firebrick", {0.698, 0.133, 0.133}},
+               {"floralwhite", {1.000, 0.980, 0.941}},
+               {"forestgreen", {0.133, 0.545, 0.133}},
+               {"fuchsia", {1.000, 0.000, 1.000}},
+               {"gainsboro", {0.863, 0.863, 0.863}},
+               {"ghostwhite", {0.973, 0.973, 1.000}},
+               {"gold", {1.000, 0.843, 0.000}},
+               {"goldenrod", {0.855, 0.647, 0.125}},
+               {"gray", {0.502, 0.502, 0.502}},
+               {"green", {0.000, 1.000, 0.000}},
+               {"greenyellow", {0.678, 1.000, 0.184}},
+               {"honeydew", {0.941, 1.000, 0.941}},
+               {"hotpink", {1.000, 0.412, 0.706}},
+               {"indianred", {0.804, 0.361, 0.361}},
+               {"indigo", {0.294, 0.000, 0.510}},
+               {"ivory", {1.000, 0.941, 0.941}},
+               {"khaki", {0.941, 0.902, 0.549}},
+               {"lavender", {0.902, 0.902, 0.980}},
+               {"lavenderblush", {1.000, 0.941, 0.961}},
+               {"lawngreen", {0.486, 0.988, 0.000}},
+               {"lemonchiffon", {1.000, 0.980, 0.804}},
+               {"lightblue", {0.678, 0.847, 0.902}},
+               {"lightcoral", {0.941, 0.502, 0.502}},
+               {"lightcyan", {0.878, 1.000, 1.000}},
+               {"lightgoldenrodyellow", {0.980, 0.980, 0.824}},
+               {"lightgreen", {0.565, 0.933, 0.565}},
+               {"lightgrey", {0.827, 0.827, 0.827}},
+               {"lightpink", {1.000, 0.714, 0.757}},
+               {"lightsalmon", {1.000, 0.627, 0.478}},
+               {"lightseagreen", {0.125, 0.698, 0.667}},
+               {"lightskyblue", {0.529, 0.808, 0.980}},
+               {"lightslategray", {0.467, 0.533, 0.600}},
+               {"lightsteelblue", {0.690, 0.769, 0.871}},
+               {"lightyellow", {1.000, 1.000, 0.878}},
+               {"lime", {0.000, 1.000, 0.000}},
+               {"limegreen", {0.196, 0.804, 0.196}},
+               {"linen", {0.980, 0.941, 0.902}},
+               {"magenta", {1.000, 0.000, 1.000}},
+               {"maroon", {0.502, 0.000, 0.000}},
+               {"mediumaquamarine", {0.400, 0.804, 0.667}},
+               {"mediumblue", {0.000, 0.000, 0.804}},
+               {"mediumorchid", {0.729, 0.333, 0.827}},
+               {"mediumpurple", {0.576, 0.439, 0.859}},
+               {"mediumseagreen", {0.235, 0.702, 0.443}},
+               {"mediumslateblue", {0.482, 0.408, 0.933}},
+               {"mediumspringgreen", {0.000, 0.980, 0.604}},
+               {"mediumturquoise", {0.282, 0.820, 0.800}},
+               {"mediumvioletred", {0.780, 0.082, 0.522}},
+               {"midnightblue", {0.098, 0.098, 0.439}},
+               {"mintcream", {0.961, 1.000, 0.980}},
+               {"mistyrose", {1.000, 0.894, 0.882}},
+               {"moccasin", {1.000, 0.894, 0.710}},
+               {"navajowhite", {1.000, 0.871, 0.678}},
+               {"navy", {0.000, 0.000, 0.502}},
+               {"oldlace", {0.992, 0.961, 0.902}},
+               {"olive", {0.502, 0.502, 0.000}},
+               {"olivedrab", {0.420, 0.557, 0.137}},
+               {"orange", {1.000, 0.502, 0.000}},
+               {"orangered", {1.000, 0.251, 0.000}},
+               {"orchid", {0.855, 0.439, 0.839}},
+               {"palegoldenrod", {0.933, 0.910, 0.667}},
+               {"palegreen", {0.596, 0.984, 0.596}},
+               {"paleturquoise", {0.686, 0.933, 0.933}},
+               {"palevioletred", {0.859, 0.439, 0.576}},
+               {"papayawhip", {1.000, 0.937, 0.835}},
+               {"peachpuff", {1.000, 0.937, 0.835}},
+               {"peru", {0.804, 0.522, 0.247}},
+               {"pink", {1.000, 0.753, 0.796}},
+               {"plum", {0.867, 0.627, 0.867}},
+               {"powderblue", {0.690, 0.878, 0.902}},
+               {"purple", {0.502, 0.000, 0.502}},
+               {"red", {1.000, 0.000, 0.000}},
+               {"rosybrown", {0.737, 0.561, 0.561}},
+               {"royalblue", {0.255, 0.412, 0.882}},
+               {"saddlebrown", {0.545, 0.271, 0.075}},
+               {"salmon", {0.980, 0.502, 0.447}},
+               {"sandybrown", {0.957, 0.643, 0.376}},
+               {"seagreen", {0.180, 0.545, 0.341}},
+               {"seashell", {1.000, 0.961, 0.933}},
+               {"sienna", {0.627, 0.322, 0.176}},
+               {"silver", {0.753, 0.753, 0.753}},
+               {"skyblue", {0.529, 0.808, 0.922}},
+               {"slateblue", {0.416, 0.353, 0.804}},
+               {"slategray", {0.439, 0.502, 0.565}},
+               {"snow", {1.000, 0.980, 0.980}},
+               {"springgreen", {0.000, 1.000, 0.498}},
+               {"steelblue", {0.275, 0.510, 0.706}},
+               {"tan", {0.824, 0.706, 0.549}},
+               {"teal", {0.000, 0.502, 0.502}},
+               {"thistle", {0.847, 0.749, 0.847}},
+               {"tomato", {0.992, 0.388, 0.278}},
+               {"turquoise", {0.251, 0.878, 0.816}},
+               {"violet", {0.933, 0.510, 0.933}},
+               {"wheat", {0.961, 0.871, 0.702}},
+               {"white", {1.000, 1.000, 1.000}},
+               {"whitesmoke", {0.961, 0.961, 0.961}},
+               {"yellow", {1.000, 1.000, 0.000}},
+               {"yellowgreen", {0.604, 0.804, 0.196}}};
+
+  // assigned per-element info: color as RGB and covalent radius
+  // this list is used by AtomEye and is taken from its Mendeleyev.c file
+  elementdata = {{"H", {{0.800, 0.800, 0.800}, 0.35}},    {"He", {{0.643, 0.667, 0.678}, 1.785}},
+                 {"Li", {{0.700, 0.700, 0.700}, 1.45}},   {"Be", {{0.643, 0.667, 0.678}, 1.05}},
+                 {"B", {{0.900, 0.400, 0.000}, 0.85}},    {"C", {{0.350, 0.350, 0.350}, 0.72}},
+                 {"N", {{0.200, 0.200, 0.800}, 0.65}},    {"O", {{0.800, 0.200, 0.200}, 0.6}},
+                 {"F", {{0.700, 0.850, 0.450}, 0.5}},     {"Ne", {{0.643, 0.667, 0.678}, 1.5662}},
+                 {"Na", {{0.600, 0.600, 0.800}, 1.8}},    {"Mg", {{0.600, 0.600, 0.700}, 1.5}},
+                 {"Al", {{0.643, 0.667, 0.678}, 1.4255}}, {"Si", {{0.690, 0.769, 0.871}, 1.07}},
+                 {"P", {{0.100, 0.700, 0.300}, 1}},       {"S", {{0.950, 0.900, 0.200}, 1}},
+                 {"Cl", {{0.150, 0.500, 0.100}, 1}},      {"Ar", {{0.643, 0.667, 0.678}, 1.8597}},
+                 {"K", {{0.800, 0.500, 0.500}, 2.2}},     {"Ca", {{0.800, 0.800, 0.700}, 1.8}},
+                 {"Sc", {{0.643, 0.667, 0.678}, 1.6}},    {"Ti", {{0.643, 0.667, 0.678}, 1.4}},
+                 {"V", {{0.643, 0.667, 0.678}, 1.51995}}, {"Cr", {{0.000, 0.800, 0.000}, 1.44225}},
+                 {"Mn", {{0.643, 0.667, 0.678}, 1.4}},    {"Fe", {{0.518, 0.576, 0.653}, 1.43325}},
+                 {"Co", {{0.643, 0.667, 0.678}, 1.35}},   {"Ni", {{0.257, 0.267, 0.271}, 1.35}},
+                 {"Cu", {{0.950, 0.790, 0.014}, 1.278}},  {"Zn", {{0.643, 0.667, 0.678}, 1.35}},
+                 {"Ga", {{0.900, 0.000, 1.000}, 1.3}},    {"Ge", {{0.643, 0.667, 0.678}, 1.25}},
+                 {"As", {{1.000, 1.000, 0.300}, 1.15}},   {"Se", {{0.643, 0.667, 0.678}, 1.15}},
+                 {"Br", {{0.500, 0.080, 0.120}, 1.15}},   {"Kr", {{0.643, 0.667, 0.678}, 2.0223}},
+                 {"Rb", {{0.643, 0.667, 0.678}, 2.35}},   {"Sr", {{0.643, 0.667, 0.678}, 2}},
+                 {"Y", {{0.643, 0.667, 0.678}, 1.8}},     {"Zr", {{0.643, 0.667, 0.678}, 1.55}},
+                 {"Nb", {{0.643, 0.667, 0.678}, 1.6504}}, {"Mo", {{0.643, 0.667, 0.678}, 1.3872}},
+                 {"Tc", {{0.643, 0.667, 0.678}, 1.35}},   {"Ru", {{0.643, 0.667, 0.678}, 1.3}},
+                 {"Rh", {{0.643, 0.667, 0.678}, 1.35}},   {"Pd", {{0.643, 0.667, 0.678}, 1.4}},
+                 {"Ag", {{0.643, 0.667, 0.678}, 1.6}},    {"Cd", {{0.643, 0.667, 0.678}, 1.55}},
+                 {"In", {{0.643, 0.667, 0.678}, 1.55}},   {"Sn", {{0.643, 0.667, 0.678}, 1.45}},
+                 {"Sb", {{0.643, 0.667, 0.678}, 1.45}},   {"Te", {{0.643, 0.667, 0.678}, 1.4}},
+                 {"I", {{0.500, 0.100, 0.500}, 1.4}},     {"Xe", {{0.643, 0.667, 0.678}, 2.192}},
+                 {"Cs", {{0.643, 0.667, 0.678}, 2.6}},    {"Ba", {{0.643, 0.667, 0.678}, 2.15}},
+                 {"La", {{0.643, 0.667, 0.678}, 1.95}},   {"Ce", {{0.800, 0.800, 0.000}, 1.85}},
+                 {"Pr", {{0.643, 0.667, 0.678}, 1.85}},   {"Nd", {{0.643, 0.667, 0.678}, 1.85}},
+                 {"Pm", {{0.643, 0.667, 0.678}, 1.85}},   {"Sm", {{0.643, 0.667, 0.678}, 1.85}},
+                 {"Eu", {{0.643, 0.667, 0.678}, 1.85}},   {"Gd", {{1.000, 0.843, 0.000}, 1.8}},
+                 {"Tb", {{0.643, 0.667, 0.678}, 1.75}},   {"Dy", {{0.643, 0.667, 0.678}, 1.75}},
+                 {"Ho", {{0.643, 0.667, 0.678}, 1.75}},   {"Er", {{0.643, 0.667, 0.678}, 1.75}},
+                 {"Tm", {{0.643, 0.667, 0.678}, 1.75}},   {"Yb", {{0.643, 0.667, 0.678}, 1.75}},
+                 {"Lu", {{0.643, 0.667, 0.678}, 1.75}},   {"Hf", {{0.643, 0.667, 0.678}, 1.55}},
+                 {"Ta", {{0.643, 0.667, 0.678}, 1.6529}}, {"W", {{0.643, 0.667, 0.678}, 1.5826}},
+                 {"Re", {{0.643, 0.667, 0.678}, 1.35}},   {"Os", {{0.643, 0.667, 0.678}, 1.3}},
+                 {"Ir", {{0.643, 0.667, 0.678}, 1.35}},   {"Pt", {{0.643, 0.667, 0.678}, 1.35}},
+                 {"Au", {{0.900, 0.800, 0.000}, 1.35}},   {"Hg", {{0.643, 0.667, 0.678}, 1.5}},
+                 {"Tl", {{0.643, 0.667, 0.678}, 1.9}},    {"Pb", {{0.643, 0.667, 0.678}, 1.8}},
+                 {"Bi", {{0.643, 0.667, 0.678}, 1.6}},    {"Po", {{0.643, 0.667, 0.678}, 1.9}},
+                 {"At", {{0.800, 0.200, 0.200}, 1.6}},    {"Rn", {{0.643, 0.667, 0.678}, 1.0}},
+                 {"Fr", {{0.643, 0.667, 0.678}, 1.0}},    {"Ra", {{0.643, 0.667, 0.678}, 2.15}},
+                 {"Ac", {{0.643, 0.667, 0.678}, 1.95}},   {"Th", {{0.643, 0.667, 0.678}, 1.8}},
+                 {"Pa", {{0.643, 0.667, 0.678}, 1.8}},    {"U", {{0.643, 0.667, 0.678}, 1.75}},
+                 {"Np", {{0.643, 0.667, 0.678}, 1.75}},   {"Pu", {{0.643, 0.667, 0.678}, 1.75}},
+                 {"Am", {{0.643, 0.667, 0.678}, 1.75}},   {"Cm", {{0.643, 0.667, 0.678}, 1.0}},
+                 {"Bk", {{0.643, 0.667, 0.678}, 1.0}},    {"Cf", {{0.100, 0.700, 0.300}, 1.6}},
+                 {"Es", {{0.100, 0.300, 0.700}, 1.6}},    {"Fm", {{0.643, 0.667, 0.678}, 1.0}},
+                 {"Md", {{0.643, 0.667, 0.678}, 1.0}},    {"No", {{0.643, 0.667, 0.678}, 1.0}},
+                 {"Lr", {{0.643, 0.667, 0.678}, 1.0}},    {"Rf", {{0.643, 0.667, 0.678}, 1.0}},
+                 {"Db", {{0.900, 0.800, 0.000}, 1.6}},    {"Sg", {{0.643, 0.667, 0.678}, 1.0}},
+                 {"Bh", {{0.643, 0.667, 0.678}, 1.0}},    {"Hs", {{0.643, 0.667, 0.678}, 1.0}},
+                 {"Mt", {{0.643, 0.667, 0.678}, 1.0}}};
+
+  boxcolor = color2rgb("gold");
+
+  // define requested color maps with default values. must come after defining color names
+
+  nmap = nmap_caller;
+  maps = new ColorMap *[nmap];
+  for (int i = 0; i < nmap; i++) maps[i] = new ColorMap(lmp, this);
 }
 
+// clang-format off
 /* ---------------------------------------------------------------------- */
 
 Image::~Image()
 {
   for (int i = 0; i < nmap; i++) delete maps[i];
   delete[] maps;
-
-  for (int i = 0; i < ncolors; i++) delete [] username[i];
-  memory->sfree(username);
-  memory->destroy(userrgb);
 
   memory->destroy(depthBuffer);
   memory->destroy(surfaceBuffer);
@@ -1917,9 +2115,9 @@ int Image::map_minmax(int index, double mindynamic, double maxdynamic)
    get min/max bounds of dynamic color map index and return 1 if dynamic
 ------------------------------------------------------------------------- */
 
-int Image::map_info(int index, double &min, double &max)
+int Image::map_info(int index, double &min, double &max, bool &sequential)
 {
-  return maps[index]->info(min, max);
+  return maps[index]->info(min, max, sequential);
 }
 
 /* ----------------------------------------------------------------------
@@ -1932,543 +2130,74 @@ double *Image::map_value2color(int index, double value)
 }
 
 /* ----------------------------------------------------------------------
-   add a new color to username and userrgb
-   redefine RGB values in userrgb if name already exists
-   return 1 if RGB values are invalid, else return 0
+   add a new color or redefine RGB values if already exists
+   return 1,2,or 3 if RGB values are invalid, else return 0
 ------------------------------------------------------------------------- */
 
-int Image::addcolor(char *name, double r, double g, double b)
+int Image::addcolor(const std::string &name, double r, double g, double b)
 {
-  int icolor;
-  for (icolor = 0; icolor < ncolors; icolor++)
-    if (strcmp(name,username[icolor]) == 0) break;
-
-  if (icolor == ncolors) {
-    username = (char **)
-      memory->srealloc(username,(ncolors+1)*sizeof(char *),"image:username");
-    memory->grow(userrgb,ncolors+1,3,"image:userrgb");
-    ncolors++;
-  }
-
-  int n = strlen(name) + 1;
-  username[icolor] = new char[n];
-  strcpy(username[icolor],name);
-
   if (r < 0.0 || r > 1.0) return 1;
   if (g < 0.0 || g > 1.0) return 2;
   if (b < 0.0 || b > 1.0) return 3;
 
-  userrgb[icolor][0] = r;
-  userrgb[icolor][1] = g;
-  userrgb[icolor][2] = b;
-
+  rgbcolors[name] = {r, g, b};
   return 0;
 }
 
 /* ----------------------------------------------------------------------
-   if index > 0, return ptr to index-1 color from rgb
-   if index < 0, return ptr to -index-1 color from userrgb
-   if index = 0, search the 2 lists of color names for the string color
-   search user-defined color names first, then the list of NCOLORS names
+   return a pointer to the 3 floating point RGB values for the given element
+------------------------------------------------------------------------- */
+
+double *Image::element2color(const std::string &element)
+{
+  auto i = elementdata.find(element);
+  if (i == elementdata.end())
+    return nullptr;
+  else
+    return i->second.rgb;
+}
+
+/* ----------------------------------------------------------------------
+   return the covalent radius for the given element
+------------------------------------------------------------------------- */
+
+double Image::element2diam(const std::string &element) const
+{
+  auto i = elementdata.find(element);
+  if (i == elementdata.end())
+    return 0.0;
+  else
+    return i->second.diam;
+}
+
+/* ----------------------------------------------------------------------
    return a pointer to the 3 floating point RGB values or nullptr if didn't find
 ------------------------------------------------------------------------- */
 
-double *Image::color2rgb(const char *color, int index)
+double *Image::color2rgb(const std::string &color)
 {
-  static const char *name[NCOLORS] = {
-    "aliceblue",
-    "antiquewhite",
-    "aqua",
-    "aquamarine",
-    "azure",
-    "beige",
-    "bisque",
-    "black",
-    "blanchedalmond",
-    "blue",
-    "blueviolet",
-    "brown",
-    "burlywood",
-    "cadetblue",
-    "chartreuse",
-    "chocolate",
-    "coral",
-    "cornflowerblue",
-    "cornsilk",
-    "crimson",
-    "cyan",
-    "darkblue",
-    "darkcyan",
-    "darkgoldenrod",
-    "darkgray",
-    "darkgreen",
-    "darkkhaki",
-    "darkmagenta",
-    "darkolivegreen",
-    "darkorange",
-    "darkorchid",
-    "darkred",
-    "darksalmon",
-    "darkseagreen",
-    "darkslateblue",
-    "darkslategray",
-    "darkturquoise",
-    "darkviolet",
-    "deeppink",
-    "deepskyblue",
-    "dimgray",
-    "dodgerblue",
-    "firebrick",
-    "floralwhite",
-    "forestgreen",
-    "fuchsia",
-    "gainsboro",
-    "ghostwhite",
-    "gold",
-    "goldenrod",
-    "gray",
-    "green",
-    "greenyellow",
-    "honeydew",
-    "hotpink",
-    "indianred",
-    "indigo",
-    "ivory",
-    "khaki",
-    "lavender",
-    "lavenderblush",
-    "lawngreen",
-    "lemonchiffon",
-    "lightblue",
-    "lightcoral",
-    "lightcyan",
-    "lightgoldenrodyellow",
-    "lightgreen",
-    "lightgrey",
-    "lightpink",
-    "lightsalmon",
-    "lightseagreen",
-    "lightskyblue",
-    "lightslategray",
-    "lightsteelblue",
-    "lightyellow",
-    "lime",
-    "limegreen",
-    "linen",
-    "magenta",
-    "maroon",
-    "mediumaquamarine",
-    "mediumblue",
-    "mediumorchid",
-    "mediumpurple",
-    "mediumseagreen",
-    "mediumslateblue",
-    "mediumspringgreen",
-    "mediumturquoise",
-    "mediumvioletred",
-    "midnightblue",
-    "mintcream",
-    "mistyrose",
-    "moccasin",
-    "navajowhite",
-    "navy",
-    "oldlace",
-    "olive",
-    "olivedrab",
-    "orange",
-    "orangered",
-    "orchid",
-    "palegoldenrod",
-    "palegreen",
-    "paleturquoise",
-    "palevioletred",
-    "papayawhip",
-    "peachpuff",
-    "peru",
-    "pink",
-    "plum",
-    "powderblue",
-    "purple",
-    "red",
-    "rosybrown",
-    "royalblue",
-    "saddlebrown",
-    "salmon",
-    "sandybrown",
-    "seagreen",
-    "seashell",
-    "sienna",
-    "silver",
-    "skyblue",
-    "slateblue",
-    "slategray",
-    "snow",
-    "springgreen",
-    "steelblue",
-    "tan",
-    "teal",
-    "thistle",
-    "tomato",
-    "turquoise",
-    "violet",
-    "wheat",
-    "white",
-    "whitesmoke",
-    "yellow",
-    "yellowgreen"
-  };
+  if (color == "none") return nullptr;
 
-  static double rgb[NCOLORS][3] = {
-    {240/255.0, 248/255.0, 255/255.0},
-    {250/255.0, 235/255.0, 215/255.0},
-    {0/255.0, 255/255.0, 255/255.0},
-    {127/255.0, 255/255.0, 212/255.0},
-    {240/255.0, 255/255.0, 255/255.0},
-    {245/255.0, 245/255.0, 220/255.0},
-    {255/255.0, 228/255.0, 196/255.0},
-    {0/255.0, 0/255.0, 0/255.0},
-    {255/255.0, 255/255.0, 205/255.0},
-    {0/255.0, 0/255.0, 255/255.0},
-    {138/255.0, 43/255.0, 226/255.0},
-    {165/255.0, 42/255.0, 42/255.0},
-    {222/255.0, 184/255.0, 135/255.0},
-    {95/255.0, 158/255.0, 160/255.0},
-    {127/255.0, 255/255.0, 0/255.0},
-    {210/255.0, 105/255.0, 30/255.0},
-    {255/255.0, 127/255.0, 80/255.0},
-    {100/255.0, 149/255.0, 237/255.0},
-    {255/255.0, 248/255.0, 220/255.0},
-    {220/255.0, 20/255.0, 60/255.0},
-    {0/255.0, 255/255.0, 255/255.0},
-    {0/255.0, 0/255.0, 139/255.0},
-    {0/255.0, 139/255.0, 139/255.0},
-    {184/255.0, 134/255.0, 11/255.0},
-    {69/255.0, 69/255.0, 69/255.0},
-    {0/255.0, 100/255.0, 0/255.0},
-    {189/255.0, 183/255.0, 107/255.0},
-    {139/255.0, 0/255.0, 139/255.0},
-    {85/255.0, 107/255.0, 47/255.0},
-    {255/255.0, 140/255.0, 0/255.0},
-    {153/255.0, 50/255.0, 204/255.0},
-    {139/255.0, 0/255.0, 0/255.0},
-    {233/255.0, 150/255.0, 122/255.0},
-    {143/255.0, 188/255.0, 143/255.0},
-    {72/255.0, 61/255.0, 139/255.0},
-    {47/255.0, 79/255.0, 79/255.0},
-    {0/255.0, 206/255.0, 209/255.0},
-    {148/255.0, 0/255.0, 211/255.0},
-    {255/255.0, 20/255.0, 147/255.0},
-    {0/255.0, 191/255.0, 255/255.0},
-    {105/255.0, 105/255.0, 105/255.0},
-    {30/255.0, 144/255.0, 255/255.0},
-    {178/255.0, 34/255.0, 34/255.0},
-    {255/255.0, 250/255.0, 240/255.0},
-    {34/255.0, 139/255.0, 34/255.0},
-    {255/255.0, 0/255.0, 255/255.0},
-    {220/255.0, 220/255.0, 220/255.0},
-    {248/255.0, 248/255.0, 255/255.0},
-    {255/255.0, 215/255.0, 0/255.0},
-    {218/255.0, 165/255.0, 32/255.0},
-    {128/255.0, 128/255.0, 128/255.0},
-    {0/255.0, 128/255.0, 0/255.0},
-    {173/255.0, 255/255.0, 47/255.0},
-    {240/255.0, 255/255.0, 240/255.0},
-    {255/255.0, 105/255.0, 180/255.0},
-    {205/255.0, 92/255.0, 92/255.0},
-    {75/255.0, 0/255.0, 130/255.0},
-    {255/255.0, 240/255.0, 240/255.0},
-    {240/255.0, 230/255.0, 140/255.0},
-    {230/255.0, 230/255.0, 250/255.0},
-    {255/255.0, 240/255.0, 245/255.0},
-    {124/255.0, 252/255.0, 0/255.0},
-    {255/255.0, 250/255.0, 205/255.0},
-    {173/255.0, 216/255.0, 230/255.0},
-    {240/255.0, 128/255.0, 128/255.0},
-    {224/255.0, 255/255.0, 255/255.0},
-    {250/255.0, 250/255.0, 210/255.0},
-    {144/255.0, 238/255.0, 144/255.0},
-    {211/255.0, 211/255.0, 211/255.0},
-    {255/255.0, 182/255.0, 193/255.0},
-    {255/255.0, 160/255.0, 122/255.0},
-    {32/255.0, 178/255.0, 170/255.0},
-    {135/255.0, 206/255.0, 250/255.0},
-    {119/255.0, 136/255.0, 153/255.0},
-    {176/255.0, 196/255.0, 222/255.0},
-    {255/255.0, 255/255.0, 224/255.0},
-    {0/255.0, 255/255.0, 0/255.0},
-    {50/255.0, 205/255.0, 50/255.0},
-    {250/255.0, 240/255.0, 230/255.0},
-    {255/255.0, 0/255.0, 255/255.0},
-    {128/255.0, 0/255.0, 0/255.0},
-    {102/255.0, 205/255.0, 170/255.0},
-    {0/255.0, 0/255.0, 205/255.0},
-    {186/255.0, 85/255.0, 211/255.0},
-    {147/255.0, 112/255.0, 219/255.0},
-    {60/255.0, 179/255.0, 113/255.0},
-    {123/255.0, 104/255.0, 238/255.0},
-    {0/255.0, 250/255.0, 154/255.0},
-    {72/255.0, 209/255.0, 204/255.0},
-    {199/255.0, 21/255.0, 133/255.0},
-    {25/255.0, 25/255.0, 112/255.0},
-    {245/255.0, 255/255.0, 250/255.0},
-    {255/255.0, 228/255.0, 225/255.0},
-    {255/255.0, 228/255.0, 181/255.0},
-    {255/255.0, 222/255.0, 173/255.0},
-    {0/255.0, 0/255.0, 128/255.0},
-    {253/255.0, 245/255.0, 230/255.0},
-    {128/255.0, 128/255.0, 0/255.0},
-    {107/255.0, 142/255.0, 35/255.0},
-    {255/255.0, 165/255.0, 0/255.0},
-    {255/255.0, 69/255.0, 0/255.0},
-    {218/255.0, 112/255.0, 214/255.0},
-    {238/255.0, 232/255.0, 170/255.0},
-    {152/255.0, 251/255.0, 152/255.0},
-    {175/255.0, 238/255.0, 238/255.0},
-    {219/255.0, 112/255.0, 147/255.0},
-    {255/255.0, 239/255.0, 213/255.0},
-    {255/255.0, 239/255.0, 213/255.0},
-    {205/255.0, 133/255.0, 63/255.0},
-    {255/255.0, 192/255.0, 203/255.0},
-    {221/255.0, 160/255.0, 221/255.0},
-    {176/255.0, 224/255.0, 230/255.0},
-    {128/255.0, 0/255.0, 128/255.0},
-    {255/255.0, 0/255.0, 0/255.0},
-    {188/255.0, 143/255.0, 143/255.0},
-    {65/255.0, 105/255.0, 225/255.0},
-    {139/255.0, 69/255.0, 19/255.0},
-    {250/255.0, 128/255.0, 114/255.0},
-    {244/255.0, 164/255.0, 96/255.0},
-    {46/255.0, 139/255.0, 87/255.0},
-    {255/255.0, 245/255.0, 238/255.0},
-    {160/255.0, 82/255.0, 45/255.0},
-    {192/255.0, 192/255.0, 192/255.0},
-    {135/255.0, 206/255.0, 235/255.0},
-    {106/255.0, 90/255.0, 205/255.0},
-    {112/255.0, 128/255.0, 144/255.0},
-    {255/255.0, 250/255.0, 250/255.0},
-    {0/255.0, 255/255.0, 127/255.0},
-    {70/255.0, 130/255.0, 180/255.0},
-    {210/255.0, 180/255.0, 140/255.0},
-    {0/255.0, 128/255.0, 128/255.0},
-    {216/255.0, 191/255.0, 216/255.0},
-    {253/255.0, 99/255.0, 71/255.0},
-    {64/255.0, 224/255.0, 208/255.0},
-    {238/255.0, 130/255.0, 238/255.0},
-    {245/255.0, 222/255.0, 179/255.0},
-    {255/255.0, 255/255.0, 255/255.0},
-    {245/255.0, 245/255.0, 245/255.0},
-    {255/255.0, 255/255.0, 0/255.0},
-    {154/255.0, 205/255.0, 50/255.0}
-  };
-
-  if (index > 0) {
-    if (index > NCOLORS) return nullptr;
-    return rgb[index-1];
-  }
-  if (index < 0) {
-    if (-index > ncolors) return nullptr;
-    return userrgb[-index-1];
-  }
-
-  if (color) {
-    if (strcmp(color,"none") == 0) return nullptr;
-    for (int i = 0; i < ncolors; i++)
-      if (strcmp(color,username[i]) == 0) return userrgb[i];
-    for (int i = 0; i < NCOLORS; i++)
-      if (strcmp(color,name[i]) == 0) return rgb[i];
-  }
-  return nullptr;
+  auto i = rgbcolors.find(color);
+  if (i == rgbcolors.end())
+    return nullptr;
+  else
+    return i->second.data();
 }
 
 /* ----------------------------------------------------------------------
-   return number of default colors
+   return first color name matching the 3 floating point RGB values or empty string
 ------------------------------------------------------------------------- */
 
-int Image::default_colors()
+std::string Image::rgb2color(const double *rgb) const
 {
-  return NCOLORS;
+  if (!rgb) return "";
+
+  for (auto c = rgbcolors.cbegin(); c != rgbcolors.cend(); ++c) {
+    if (rgb == c->second.data()) return c->first;
+  }
+  return "";
 }
-
-/* ----------------------------------------------------------------------
-   search the list of element names for the string element
-   return a pointer to the 3 floating point RGB values
-   this list is used by AtomEye and is taken from its Mendeleyev.c file
-------------------------------------------------------------------------- */
-
-double *Image::element2color(char *element)
-{
-  static const char *name[NELEMENTS] = {
-    "H", "He", "Li", "Be", "B", "C", "N", "O", "F", "Ne",
-    "Na", "Mg", "Al", "Si", "P", "S", "Cl", "Ar", "K", "Ca",
-    "Sc", "Ti", "V", "Cr", "Mn", "Fe", "Co", "Ni", "Cu", "Zn",
-    "Ga", "Ge", "As", "Se", "Br", "Kr", "Rb", "Sr", "Y", "Zr",
-    "Nb", "Mo", "Tc", "Ru", "Rh", "Pd", "Ag", "Cd", "In", "Sn",
-    "Sb", "Te", "I", "Xe", "Cs", "Ba", "La", "Ce", "Pr", "Nd",
-    "Pm", "Sm", "Eu", "Gd", "Tb", "Dy", "Ho", "Er", "Tm", "Yb",
-    "Lu", "Hf", "Ta", "W", "Re", "Os", "Ir", "Pt", "Au", "Hg",
-    "Tl", "Pb", "Bi", "Po", "At", "Rn", "Fr", "Ra", "Ac", "Th",
-    "Pa", "U", "Np", "Pu", "Am", "Cm", "Bk", "Cf", "Es", "Fm",
-    "Md", "No", "Lr", "Rf", "Db", "Sg", "Bh", "Hs", "Mt"
-  };
-
-  static double rgb[NELEMENTS][3] = {
-    {0.8, 0.8, 0.8},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.7, 0.7, 0.7},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.9, 0.4, 0},
-    {0.35, 0.35, 0.35},
-    {0.2, 0.2, 0.8},
-    {0.8, 0.2, 0.2},
-    {0.7, 0.85, 0.45},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6, 0.6, 0.8},
-    {0.6, 0.6, 0.7},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6901960784, 0.768627451, 0.8705882353},
-    {0.1, 0.7, 0.3},
-    {0.95, 0.9, 0.2},
-    {0.15, 0.5, 0.1},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.8, 0.5, 0.5},
-    {0.8, 0.8, 0.7},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0, 0.8, 0},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.5176470588, 0.5764705882, 0.6529411765},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.257254902, 0.2666666667, 0.271372549},
-    {0.95, 0.7900735294, 0.01385869565},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.9, 0, 1},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {1, 1, 0.3},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.5, 0.08, 0.12},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.5, 0.1, 0.5},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.8, 0.8, 0},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {1, 0.8431372549, 0},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.9, 0.8, 0},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.8, 0.2, 0.2},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.1, 0.7, 0.3},
-    {0.1, 0.3, 0.7},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.9, 0.8, 0},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725},
-    {0.6431372549, 0.6666666667, 0.6784313725}
-  };
-
-  for (int i = 0; i < NELEMENTS; i++)
-    if (strcmp(element,name[i]) == 0) return rgb[i];
-  return nullptr;
-}
-
-/* ----------------------------------------------------------------------
-   search the list of element names for the string element
-   return a pointer to the 3 floating point RGB values
-   this list is used by AtomEye and is taken from its Mendeleyev.c file
-------------------------------------------------------------------------- */
-
-double Image::element2diam(char *element)
-{
-  static const char *name[NELEMENTS] = {
-    "H", "He", "Li", "Be", "B", "C", "N", "O", "F", "Ne",
-    "Na", "Mg", "Al", "Si", "P", "S", "Cl", "Ar", "K", "Ca",
-    "Sc", "Ti", "V", "Cr", "Mn", "Fe", "Co", "Ni", "Cu", "Zn",
-    "Ga", "Ge", "As", "Se", "Br", "Kr", "Rb", "Sr", "Y", "Zr",
-    "Nb", "Mo", "Tc", "Ru", "Rh", "Pd", "Ag", "Cd", "In", "Sn",
-    "Sb", "Te", "I", "Xe", "Cs", "Ba", "La", "Ce", "Pr", "Nd",
-    "Pm", "Sm", "Eu", "Gd", "Tb", "Dy", "Ho", "Er", "Tm", "Yb",
-    "Lu", "Hf", "Ta", "W", "Re", "Os", "Ir", "Pt", "Au", "Hg",
-    "Tl", "Pb", "Bi", "Po", "At", "Rn", "Fr", "Ra", "Ac", "Th",
-    "Pa", "U", "Np", "Pu", "Am", "Cm", "Bk", "Cf", "Es", "Fm",
-    "Md", "No", "Lr", "Rf", "Db", "Sg", "Bh", "Hs", "Mt"
-  };
-
-  static double diameter[NELEMENTS] = {
-    0.35, 1.785, 1.45, 1.05, 0.85, 0.72, 0.65, 0.6, 0.5, 1.5662,
-    1.8, 1.5, 1.4255, 1.07, 1, 1, 1, 1.8597, 2.2, 1.8,
-    1.6, 1.4, 1.51995, 1.44225, 1.4, 1.43325, 1.35, 1.35, 1.278, 1.35,
-    1.3, 1.25, 1.15, 1.15, 1.15, 2.0223, 2.35, 2, 1.8, 1.55,
-    1.6504, 1.3872, 1.35, 1.3, 1.35, 1.4, 1.6, 1.55, 1.55, 1.45,
-    1.45, 1.4, 1.4, 2.192, 2.6, 2.15, 1.95, 1.85, 1.85, 1.85,
-    1.85, 1.85, 1.85, 1.8, 1.75, 1.75, 1.75, 1.75, 1.75, 1.75,
-    1.75, 1.55, 1.6529, 1.5826, 1.35, 1.3, 1.35, 1.35, 1.35, 1.5,
-    1.9, 1.8, 1.6, 1.9, 1.6, 1.0, 1.0, 2.15, 1.95, 1.8,
-    1.8, 1.75, 1.75, 1.75, 1.75, 1.0, 1.0, 1.6, 1.6, 1.0,
-    1.0, 1.0, 1.0, 1.0, 1.6, 1.0, 1.0, 1.0, 1.0
-  };
-
-  for (int i = 0; i < NELEMENTS; i++)
-    if (strcmp(element,name[i]) == 0) return diameter[i];
-  return 0.0;
-}
-
 // ----------------------------------------------------------------------
 // ----------------------------------------------------------------------
 // ColorMap class
@@ -2500,7 +2229,7 @@ ColorMap::ColorMap(LAMMPS *lmp, Image *caller) : Pointers(lmp)
 
 ColorMap::~ColorMap()
 {
-  delete [] mentry;
+  delete[] mentry;
 }
 
 /* ----------------------------------------------------------------------
@@ -2546,7 +2275,7 @@ int ColorMap::reset(int narg, char **arg)
 
   nentry = utils::inumeric(FLERR,arg[4],false,lmp);
   if (nentry < 1) return 5;
-  delete [] mentry;
+  delete[] mentry;
   mentry = new MapEntry[nentry];
   mentry[0].svalue = 0.0;
 
@@ -2661,10 +2390,13 @@ int ColorMap::minmax(double mindynamic, double maxdynamic)
   return 0;
 }
 
-int ColorMap::info(double &min, double &max)
+// clang-format on
+
+int ColorMap::info(double &min, double &max, bool &sequential)
 {
   min = locurrent;
   max = hicurrent;
+  sequential = mstyle == SEQUENTIAL;
   return dynamic;
 }
 
@@ -2675,14 +2407,16 @@ int ColorMap::info(double &min, double &max)
 
 double *ColorMap::value2color(double value)
 {
-  double lo;//,hi;
+  double lo;    //,hi;
 
-  value = MAX(value,locurrent);
-  value = MIN(value,hicurrent);
+  value = MAX(value, locurrent);
+  value = MIN(value, hicurrent);
 
   if (mrange == FRACTIONAL) {
-    if (locurrent == hicurrent) value = 0.0;
-    else value = (value-locurrent) / (hicurrent-locurrent);
+    if (locurrent == hicurrent)
+      value = 0.0;
+    else
+      value = (value - locurrent) / (hicurrent - locurrent);
     lo = 0.0;
     //hi = 1.0;
   } else {
@@ -2691,25 +2425,27 @@ double *ColorMap::value2color(double value)
   }
 
   if (mstyle == CONTINUOUS) {
-    for (int i = 0; i < nentry-1; i++)
-      if (value >= mentry[i].svalue && value <= mentry[i+1].svalue) {
-        double fraction = (value-mentry[i].svalue) /
-          (mentry[i+1].svalue-mentry[i].svalue);
-        interpolate[0] = mentry[i].color[0] +
-          fraction*(mentry[i+1].color[0]-mentry[i].color[0]);
-        interpolate[1] = mentry[i].color[1] +
-          fraction*(mentry[i+1].color[1]-mentry[i].color[1]);
-        interpolate[2] = mentry[i].color[2] +
-          fraction*(mentry[i+1].color[2]-mentry[i].color[2]);
+    for (int i = 0; i < nentry - 1; i++)
+      if (value >= mentry[i].svalue && value <= mentry[i + 1].svalue) {
+        if (mentry[i].color) {
+          double fraction = (value - mentry[i].svalue) / (mentry[i + 1].svalue - mentry[i].svalue);
+          interpolate[0] =
+              mentry[i].color[0] + fraction * (mentry[i + 1].color[0] - mentry[i].color[0]);
+          interpolate[1] =
+              mentry[i].color[1] + fraction * (mentry[i + 1].color[1] - mentry[i].color[1]);
+          interpolate[2] =
+              mentry[i].color[2] + fraction * (mentry[i + 1].color[2] - mentry[i].color[2]);
+        } else {
+          interpolate[0] = interpolate[1] = interpolate[2] = 1.0;
+        }
         return interpolate;
       }
   } else if (mstyle == DISCRETE) {
     for (int i = 0; i < nentry; i++)
-      if (value >= mentry[i].lvalue && value <= mentry[i].hvalue)
-        return mentry[i].color;
+      if (value >= mentry[i].lvalue && value <= mentry[i].hvalue) return mentry[i].color;
   } else {
-    int ibin = static_cast<int>((value-lo) * mbinsizeinv);
-    return mentry[ibin%nentry].color;
+    int ibin = static_cast<int>((value - lo) * mbinsizeinv);
+    return mentry[ibin % nentry].color;
   }
 
   // always return a non-NULL pointer
