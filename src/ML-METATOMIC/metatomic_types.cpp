@@ -25,6 +25,7 @@ using namespace LAMMPS_NS;
 CommonMetatomicData::CommonMetatomicData(std::string length_unit): device(torch::kCPU) {
     auto options = torch::TensorOptions().dtype(torch::kInt32);
     this->selected_atoms_values = torch::zeros({0, 2}, options);
+    this->selected_atoms_values_cpu = torch::zeros({0, 2}, options);
 
     // Initialize evaluation_options
     this->evaluation_options = torch::make_intrusive<metatomic_torch::ModelEvaluationOptionsHolder>();
