@@ -89,6 +89,14 @@ struct FixMetatomicData: public CommonMetatomicData {
    FixMetatomicData(std::string length_unit): CommonMetatomicData(std::move(length_unit)) {}
 };
 
+struct ComputeMetatomicData: public CommonMetatomicData {
+   ComputeMetatomicData(std::string length_unit): CommonMetatomicData(std::move(length_unit)) {}
+   // the inputs the model requested, and their corresponding holders
+   std::map<std::string, metatomic_torch::ModelOutput> requested_inputs;
+   // the output we'll request from a model
+   metatomic_torch::ModelOutput requested_output;
+};
+
 }    // namespace LAMMPS_NS
 
 #endif

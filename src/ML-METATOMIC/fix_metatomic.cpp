@@ -25,7 +25,7 @@
 ------------------------------------------------------------------------- */
 #include "metatomic_types.h"
 #include "metatomic_system.h"
-#include "metatomic_units.h"
+#include "metatomic_quantities.h"
 
 #include "fix_metatomic.h"
 

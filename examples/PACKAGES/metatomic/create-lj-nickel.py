@@ -6,6 +6,8 @@ except ImportError as e:
         "`pip install git+https://github.com/metatensor/lj-test/`"
     ) from e
 
+from metatomic.torch.heat_flux import HeatFlux
+
 
 model = metatomic_lj_test.lennard_jones_model(
     atomic_type=28,
@@ -20,6 +22,9 @@ model = metatomic_lj_test.lennard_jones_model(
 model.save("nickel-lj.pt")
 print("created 'nickel-lj.pt' model")
 
+wrapped_model = HeatFlux.wrap(model)
+wrapped_model.save("nickel-lj-heat-flux.pt", collect_extensions="collected-heat-flux-extensions/")
+print("created 'nickel-lj-heat-flux.pt' model")
 
 model = metatomic_lj_test.lennard_jones_model(
     atomic_type=28,
@@ -32,3 +37,4 @@ model = metatomic_lj_test.lennard_jones_model(
 )
 model.save("nickel-lj-extensions.pt", collect_extensions="collected-extensions/")
 print("created 'nickel-lj-extensions.pt' model")
+

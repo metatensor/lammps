@@ -11,8 +11,8 @@
    See the README file in the top-level LAMMPS directory.
 ------------------------------------------------------------------------- */
 
-#ifndef LMP_METATOMIC_UNITS_H
-#define LMP_METATOMIC_UNITS_H
+#ifndef LMP_METATOMIC_QUANTITIES_H
+#define LMP_METATOMIC_QUANTITIES_H
 
 #include <map>
 #include <string>
@@ -20,6 +20,7 @@
 namespace LAMMPS_NS {
 
 extern const std::map<std::string, std::map<std::string, std::string>> metatomic_unit_map;
+extern const std::map<std::string, std::map<std::string, std::string>> metatomic_quantity_shape;
 
 }    // namespace LAMMPS_NS
 
