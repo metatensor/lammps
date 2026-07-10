@@ -690,14 +690,15 @@ void PairMetatomic::compute(int eflag, int vflag) {
         input_holders
     );
 
-    // only run the calculation for atoms actually in the current domain
+    // build selected atoms on CPU, then copy to device
+    mta_data->selected_atoms_values_cpu.resize_({atom->nlocal, 2});
+    auto accessor = mta_data->selected_atoms_values_cpu.accessor<int32_t, 2>();
+    for (int i = 0; i < atom->nlocal; i++) {
+        accessor[i][0] = 0;
+        accessor[i][1] = i;
+    }
     mta_data->selected_atoms_values.resize_({atom->nlocal, 2});
-    mta_data->selected_atoms_values.index_put_({torch::indexing::Slice(), 0}, 0);
-    auto options = mta_data->selected_atoms_values.options();
-    mta_data->selected_atoms_values.index_put_(
-        {torch::indexing::Slice(), 1},
-        torch::arange(atom->nlocal, options)
-    );
+    mta_data->selected_atoms_values.copy_(mta_data->selected_atoms_values_cpu);
 
     auto selected_atoms = torch::make_intrusive<metatensor_torch::LabelsHolder>(
         std::vector<std::string>{"system", "atom"},
