@@ -19,12 +19,14 @@
 #include "metatomic_system_kokkos.h"
 #include "memory_kokkos.h"
 #include "metatomic_timer.h"
+#include "metatomic_units.h"
 
 #include "atom_masks.h"
 #include "atom_kokkos.h"
 #include "comm.h"
 #include "domain.h"
 #include "error.h"
+#include "update.h"
 
 #include <torch/cuda.h>
 
@@ -399,7 +401,8 @@ metatomic_torch::System MetatomicSystemAdaptorKokkos<DeviceType>::system_from_lm
     NeighList* list,
     bool do_virial,
     torch::ScalarType dtype,
-    torch::Device device
+    torch::Device device,
+    const std::map<std::string, torch::intrusive_ptr<metatomic_torch::ModelOutputHolder>>& requested_inputs
 ) {
     auto _ = MetatomicTimer("creating System from LAMMPS-kokkos data");
     assert(device == this->device_);
@@ -490,11 +493,73 @@ metatomic_torch::System MetatomicSystemAdaptorKokkos<DeviceType>::system_from_lm
     assert(kk_list != nullptr);
     this->setup_neighbors_kk(system, kk_list);
 
+    for (const auto& [name, input]: requested_inputs) {
+        const auto& unit = input->unit().c_str();
+        if (name == "mass" || name == "masses") {
+            add_masses(system, name);
+        } else if (name == "momentum" || name == "momenta") {
+            add_momenta(system, name);
+        } else if (name == "velocity" || name == "velocities") {
+            add_velocities(system, name);
+        } else {
+            error->all(FLERR, "compute metatomic: the model requested an unsupported additional input '{}'", name);
+        }
+    }
+
     return system;
 }
 
+static metatensor_torch::TensorMap make_per_atom_tensormap(
+    torch::Tensor values,
+    std::string property_name,
+    std::vector<std::string> component_names
+) {
+    assert (values.dim() == static_cast<int64_t>(component_names.size() + 1));
+
+    auto n_atoms = values.size(0);
+    auto device = values.device();
+    auto label_tensor_options = torch::TensorOptions().dtype(torch::kInt32).device(device);
+
+    auto keys = metatensor_torch::LabelsHolder::single()->to(device);
+    auto samples_values = torch::column_stack({
+        torch::zeros(n_atoms, label_tensor_options).unsqueeze(1),
+        torch::arange(n_atoms, label_tensor_options).unsqueeze(1)
+    });
+    auto samples = torch::make_intrusive<metatensor_torch::LabelsHolder>(
+        std::vector<std::string>{"system", "atom"},
+        samples_values,
+        metatensor::assume_unique{}
+    );
+
+    auto components = std::vector<metatensor_torch::Labels>{};
+    for (size_t axis = 0; axis < component_names.size(); axis++) {
+        auto component_values = torch::arange(values.size(axis + 1), label_tensor_options).unsqueeze(1);
+        auto component = torch::make_intrusive<metatensor_torch::LabelsHolder>(
+            std::vector<std::string>{std::move(component_names[axis])},
+            component_values
+        );
+        components.push_back(component);
+    }
+
+    auto properties = torch::make_intrusive<metatensor_torch::LabelsHolder>(
+        std::vector<std::string>{std::move(property_name)},
+        torch::tensor({{0}}, label_tensor_options)
+    );
+    auto block = torch::make_intrusive<metatensor_torch::TensorBlockHolder>(
+        values.unsqueeze(-1),
+        samples,
+        components,
+        properties
+    );
+
+    return torch::make_intrusive<metatensor_torch::TensorMapHolder>(
+        keys,
+        std::vector<metatensor_torch::TensorBlock>{block}
+    );
+}
+
 template<class DeviceType>
-void MetatomicSystemAdaptorKokkos<DeviceType>::add_masses(metatomic_torch::System& system, std::string name, double unit_conversion) {
+void MetatomicSystemAdaptorKokkos<DeviceType>::add_masses(metatomic_torch::System& system, std::string name) {
     auto rmass = atomKK->k_rmass.view<DeviceType>();
     auto mass = atomKK->k_mass.view<DeviceType>();
     auto type = atomKK->k_type.view<DeviceType>();
@@ -525,33 +590,11 @@ void MetatomicSystemAdaptorKokkos<DeviceType>::add_masses(metatomic_torch::Syste
     }
 
     masses = masses.index_select(0, this->mta_to_lmp_tensor);
-    masses = masses * unit_conversion;
 
-    auto keys = metatensor_torch::LabelsHolder::single()->to(device);
+    auto tensor = make_per_atom_tensormap(masses.to(dtype), "mass", std::vector<std::string>({}));
 
-    auto label_tensor_options = torch::TensorOptions().dtype(torch::kInt32).device(device);
-    auto samples_values = torch::column_stack({
-        torch::zeros(system->size(), label_tensor_options).unsqueeze(1),
-        torch::arange(system->size(), label_tensor_options).unsqueeze(1)
-    });
-    auto samples = torch::make_intrusive<metatensor_torch::LabelsHolder>(
-        std::vector<std::string>{"system","atom"},
-        samples_values,
-        metatensor::assume_unique{}
-    );
-
-    auto properties = metatensor_torch::LabelsHolder::single()->to(device);
-
-    auto block = torch::make_intrusive<metatensor_torch::TensorBlockHolder>(
-        masses.to(dtype).unsqueeze(-1),
-        samples,
-        std::vector<metatensor_torch::Labels>{},
-        properties
-    );
-    auto tensor = torch::make_intrusive<metatensor_torch::TensorMapHolder>(
-        keys,
-        std::vector<metatensor_torch::TensorBlock>{block}
-    );
+    auto unit = metatomic_unit_map.at("mass").at(update->unit_style);
+    tensor->set_info("unit", unit);
 
     assert(name == "mass" || name == "masses");
     system->add_data(name, tensor);
@@ -559,7 +602,7 @@ void MetatomicSystemAdaptorKokkos<DeviceType>::add_masses(metatomic_torch::Syste
 
 
 template<class DeviceType>
-void MetatomicSystemAdaptorKokkos<DeviceType>::add_momenta(metatomic_torch::System& system, std::string name, double unit_conversion) {
+void MetatomicSystemAdaptorKokkos<DeviceType>::add_momenta(metatomic_torch::System& system, std::string name) {
     auto v = atomKK->k_v.view<DeviceType>();
     auto rmass = atomKK->k_rmass.view<DeviceType>();
     auto mass = atomKK->k_mass.view<DeviceType>();
@@ -585,41 +628,42 @@ void MetatomicSystemAdaptorKokkos<DeviceType>::add_momenta(metatomic_torch::Syst
     });
 
     momenta = momenta.index_select(0, this->mta_to_lmp_tensor);
-    momenta = momenta * unit_conversion;
 
-    auto keys = metatensor_torch::LabelsHolder::single()->to(device);
+    auto tensor = make_per_atom_tensormap(momenta.to(dtype), "momentum", {"xyz"});
 
-    auto label_tensor_options = torch::TensorOptions().dtype(torch::kInt32).device(device);
-    auto samples_values = torch::column_stack({
-        torch::zeros(system->size(), label_tensor_options).unsqueeze(1),
-        torch::arange(system->size(), label_tensor_options).unsqueeze(1)
-    });
-    auto samples = torch::make_intrusive<metatensor_torch::LabelsHolder>(
-        std::vector<std::string>{"system","atom"},
-        samples_values,
-        metatensor::assume_unique{}
-    );
-
-    auto component_values = torch::arange(3, label_tensor_options).unsqueeze(1);
-    auto component = torch::make_intrusive<metatensor_torch::LabelsHolder>(
-        std::vector<std::string>{"xyz"}, component_values
-    );
-
-    auto properties = metatensor_torch::LabelsHolder::single()->to(device);
-
-    auto block = torch::make_intrusive<metatensor_torch::TensorBlockHolder>(
-        momenta.to(dtype).unsqueeze(-1),
-        samples,
-        std::vector<metatensor_torch::Labels>{component},
-        properties
-    );
-    auto tensor = torch::make_intrusive<metatensor_torch::TensorMapHolder>(
-        keys,
-        std::vector<metatensor_torch::TensorBlock>{block}
-    );
+    auto mass_unit = metatomic_unit_map.at("mass").at(update->unit_style);
+    auto velocity_unit = metatomic_unit_map.at("velocity").at(update->unit_style);
+    tensor->set_info("unit", mass_unit + "*" + velocity_unit);
 
     assert(name == "momentum" || name == "momenta");
     system->add_data(name, tensor);
+}
+
+template<class DeviceType>
+void MetatomicSystemAdaptorKokkos<DeviceType>::add_velocities(metatomic_torch::System& system, std::string name) {
+    auto v = atomKK->k_v.view<DeviceType>();
+
+    auto total_n_atoms = atomKK->nlocal + atomKK->nghost;
+
+    auto device = system->device();
+    auto dtype = system->scalar_type();
+
+    // Gather velocities in a tensor - create directly on device
+    auto float_tensor_options = torch::TensorOptions().dtype(torch::kFloat64).device(device);
+
+    auto velocities = torch::from_blob(
+        v.data(), {total_n_atoms, 3},
+        float_tensor_options.requires_grad(false)
+    );
+
+    velocities = velocities.index_select(0, mta_to_lmp_tensor);
+    auto tensor = make_per_atom_tensormap(velocities.to(dtype), "velocity", {"xyz"});
+
+    auto unit = metatomic_unit_map.at("velocity").at(update->unit_style);
+    tensor->set_info("unit", unit);
+
+    assert(name == "velocity" || name == "velocities");
+    system->add_data(name, tensor, /*override=*/true);
 }
 
 namespace LAMMPS_NS {
