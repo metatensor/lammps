@@ -16,6 +16,7 @@
 ------------------------------------------------------------------------- */
 #include "metatomic_system.h"
 #include "metatomic_timer.h"
+#include "metatomic_types.h"
 #include "metatomic_quantities.h"
 
 #include "atom.h"
@@ -24,7 +25,9 @@
 #include "error.h"
 #include "update.h"
 
+#include "neighbor.h"
 #include "neigh_list.h"
+#include "neigh_request.h"
 
 #include <map>
 #include <string>
@@ -185,6 +188,33 @@ void MetatomicSystemAdaptor::add_nl_request(double cutoff, metatomic_torch::Neig
     });
 }
 
+// Translate from the metatomic neighbor lists requests to LAMMPS neighbor lists requests
+void MetatomicSystemAdaptor::configure_neighbor_lists(NeighRequest* request, CommonMetatomicData* mta_data, const char* requester) {
+    request->set_cutoff(mta_data->max_cutoff);
+
+    auto mincut = mta_data->max_cutoff + neighbor->skin;
+    if (comm->get_comm_cutoff() < mincut) {
+        if (comm->me == 0) {
+            error->warning(FLERR,
+                "Increasing communication cutoff to {:.8} for {}",
+                mincut, requester
+            );
+        }
+        comm->cutghostuser = mincut;
+    }
+
+    // Translate from the metatomic neighbor lists requests to LAMMPS neighbor
+    // lists requests.
+    auto requested_nl = mta_data->model->run_method("requested_neighbor_lists");
+    for (const auto& ivalue: requested_nl.toList()) {
+        auto options = ivalue.get().toCustomClass<metatomic_torch::NeighborListOptionsHolder>();
+        auto cutoff = options->engine_cutoff(mta_data->evaluation_options->length_unit());
+        assert(cutoff <= mta_data->max_cutoff);
+
+        this->add_nl_request(cutoff, options);
+    }
+
+}
 
 static std::array<int32_t, 3> cell_shifts(
     const std::array<std::array<double, 3>, 3>& cell_inv,

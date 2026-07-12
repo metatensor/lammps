@@ -283,29 +283,7 @@ void FixMetatomic::init() {
     // ALL pairs, even if options->full_list() is false. We will then filter
     // the pairs to only include each pair once where needed.
     auto request = neighbor->add_request(this, NeighConst::REQ_FULL | NeighConst::REQ_GHOST);
-    request->set_cutoff(mta_data->max_cutoff);
-
-    auto mincut = mta_data->max_cutoff + neighbor->skin;
-    if (comm->get_comm_cutoff() < mincut) {
-        if (comm->me == 0) {
-            error->warning(FLERR,
-                "Increasing communication cutoff to {:.8} for fix metatomic",
-                mincut
-            );
-        }
-        comm->cutghostuser = mincut;
-    }
-
-    // Translate from the metatomic neighbor lists requests to LAMMPS neighbor
-    // lists requests.
-    auto requested_nl = mta_data->model->run_method("requested_neighbor_lists");
-    for (const auto& ivalue: requested_nl.toList()) {
-        auto options = ivalue.get().toCustomClass<metatomic_torch::NeighborListOptionsHolder>();
-        auto cutoff = options->engine_cutoff(mta_data->evaluation_options->length_unit());
-        assert(cutoff <= mta_data->max_cutoff);
-
-        this->system_adaptor->add_nl_request(cutoff, options);
-    }
+    this->system_adaptor->configure_neighbor_lists(request, mta_data, "fix metatomic");
 
     // HACK: Explicitly set the binsize for the neighbor list if there is no
     // pair_style that would set it instead.

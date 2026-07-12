@@ -44,7 +44,8 @@ struct CommonMetatomicData {
    // back to the requested neighbor lists when the range is infinite
    void resolve_max_cutoff(LAMMPS* lmp);
 
-   // set the selected atoms in the evaluation options according to the request of lmp
+   // set the selected atoms in the evaluation options according to the request of lmp,
+   // build selected atoms on CPU, then copy to device
    void set_selected_atoms(Atom* atom, int groupbit);
 
    // collect the additional inputs requested by the model

@@ -524,18 +524,7 @@ void PairMetatomic::init_style() {
     // ALL pairs, even if options->full_list() is false. We will then filter
     // the pairs to only include each pair once where needed.
     auto request = neighbor->add_request(this, NeighConst::REQ_FULL | NeighConst::REQ_GHOST);
-    request->set_cutoff(mta_data->max_cutoff);
-
-    // Translate from the metatomic neighbor lists requests to LAMMPS neighbor
-    // lists requests.
-    auto requested_nl = mta_data->model->run_method("requested_neighbor_lists");
-    for (const auto& ivalue: requested_nl.toList()) {
-        auto options = ivalue.get().toCustomClass<metatomic_torch::NeighborListOptionsHolder>();
-        auto cutoff = options->engine_cutoff(mta_data->evaluation_options->length_unit());
-        assert(cutoff <= mta_data->max_cutoff);
-
-        this->system_adaptor->add_nl_request(cutoff, options);
-    }
+    this->system_adaptor->configure_neighbor_lists(request, mta_data, "pair metatomic");
 }
 
 void PairMetatomic::init_list(int id, NeighList *ptr) {
@@ -607,7 +596,6 @@ void PairMetatomic::compute(int eflag, int vflag) {
         input_holders
     );
 
-    // build selected atoms on CPU, then copy to device
     // only include atoms in the "all" group; atoms temporarily removed from
     // the all group (e.g. by fix_gcmc) are excluded.
     mta_data->set_selected_atoms(atom, 1);
