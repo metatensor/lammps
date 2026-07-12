@@ -783,7 +783,7 @@ void MetatomicSystemAdaptor::add_velocities(metatomic_torch::System& system, std
 
     // gather velocities (per-atom) in a CPU tensor and ship to device
     auto velocities = torch::from_blob(
-        v,
+        *v,
         {total_n_atoms, 3},
         torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU).requires_grad(false)
     );
