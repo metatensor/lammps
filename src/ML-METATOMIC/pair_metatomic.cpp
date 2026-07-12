@@ -610,35 +610,7 @@ void PairMetatomic::compute(int eflag, int vflag) {
     // build selected atoms on CPU, then copy to device
     // only include atoms in the "all" group; atoms temporarily removed from
     // the all group (e.g. by fix_gcmc) are excluded.
-    int nlocal = atom->nlocal;
-    int *mask = atom->mask;
-
-    int64_t n_selected = 0;
-    for (int i = 0; i < nlocal; i++) {
-        if (mask[i] & 1) {
-            n_selected++;
-        }
-    }
-
-    mta_data->selected_atoms_values_cpu.resize_({n_selected, 2});
-    auto accessor = mta_data->selected_atoms_values_cpu.accessor<int32_t, 2>();
-    int64_t idx = 0;
-    for (int i = 0; i < nlocal; i++) {
-        if (mask[i] & 1) {
-            accessor[idx][0] = 0;
-            accessor[idx][1] = i;
-            idx++;
-        }
-    }
-    mta_data->selected_atoms_values.resize_({n_selected, 2});
-    mta_data->selected_atoms_values.copy_(mta_data->selected_atoms_values_cpu);
-
-    auto selected_atoms = torch::make_intrusive<metatensor_torch::LabelsHolder>(
-        std::vector<std::string>{"system", "atom"},
-        mta_data->selected_atoms_values,
-        metatensor::assume_unique{}
-    );
-    mta_data->evaluation_options->set_selected_atoms(selected_atoms);
+    mta_data->set_selected_atoms(atom, 1);
 
     torch::IValue results_ivalue;
     try {
