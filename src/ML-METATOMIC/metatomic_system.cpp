@@ -193,7 +193,7 @@ void MetatomicSystemAdaptor::configure_neighbor_lists(NeighRequest* request, Com
     request->set_cutoff(mta_data->max_cutoff);
 
     auto mincut = mta_data->max_cutoff + neighbor->skin;
-    if (comm->get_comm_cutoff() < mincut) {
+    if (strcmp(requester, "pair metatomic") != 0 && comm->get_comm_cutoff() < mincut) {
         if (comm->me == 0) {
             error->warning(FLERR,
                 "Increasing communication cutoff to {:.8} for {}",
