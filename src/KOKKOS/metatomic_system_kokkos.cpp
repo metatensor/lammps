@@ -86,17 +86,17 @@ Kokkos::Array<int32_t, 3> cell_shifts(
 ) {
     auto shift_a = static_cast<int32_t>(std::round(
             cell_inv(0, 0) * pair_shift[0] +
-            cell_inv(0, 1) * pair_shift[1] +
-            cell_inv(0, 2) * pair_shift[2]
+            cell_inv(1, 0) * pair_shift[1] +
+            cell_inv(2, 0) * pair_shift[2]
     ));
     auto shift_b = static_cast<int32_t>(std::round(
-        cell_inv(1, 0) * pair_shift[0] +
+        cell_inv(0, 1) * pair_shift[0] +
         cell_inv(1, 1) * pair_shift[1] +
-        cell_inv(1, 2) * pair_shift[2]
+        cell_inv(2, 1) * pair_shift[2]
     ));
     auto shift_c = static_cast<int32_t>(std::round(
-        cell_inv(2, 0) * pair_shift[0] +
-        cell_inv(2, 1) * pair_shift[1] +
+        cell_inv(0, 2) * pair_shift[0] +
+        cell_inv(1, 2) * pair_shift[1] +
         cell_inv(2, 2) * pair_shift[2]
     ));
     return {shift_a, shift_b, shift_c};
