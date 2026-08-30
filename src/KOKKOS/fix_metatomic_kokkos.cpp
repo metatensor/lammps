@@ -69,6 +69,10 @@ FixMetatomicKokkos<DeviceType>::~FixMetatomicKokkos() {}
 
 template<class DeviceType>
 void FixMetatomicKokkos<DeviceType>::init() {
+    if (this->rescale_energy) {
+        error->all(FLERR, "fix metatomic/kk does not support 'rescale_energy' yet "
+                          "(the Kokkos initial_integrate/post_force overrides bypass the rescale)");
+    }
     FixMetatomic::init();
 
     auto request = neighbor->find_request(this);

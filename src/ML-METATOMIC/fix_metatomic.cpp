@@ -32,6 +32,7 @@
 #include "atom.h"
 #include "memory.h"
 #include "modify.h"
+#include "compute.h"
 #include "error.h"
 #include "group.h"
 #include "force.h"
@@ -43,6 +44,7 @@
 
 #include <vector>
 #include <algorithm>
+#include <cmath>
 
 #include <metatomic/torch.hpp>
 #include <metatensor/torch.hpp>
@@ -83,6 +85,10 @@ FixMetatomic::FixMetatomic(LAMMPS *lmp, int narg, char **arg): Fix(lmp, narg, ar
     this->model_path = arg[3];
     this->requested_device = std::nullopt;
     this->extensions_directory = std::nullopt;
+    this->rescale_energy = false;
+    this->pe_compute = nullptr;
+    this->rescale_U_old = 0.0;
+    this->rescale_K_before = 0.0;
     std::vector<int> parsed_types;
 
     this->mta_data = new FixMetatomicData(std::move(length_unit));
@@ -152,10 +158,23 @@ FixMetatomic::FixMetatomic(LAMMPS *lmp, int narg, char **arg): Fix(lmp, narg, ar
             }
             this->extensions_directory = std::string(arg[iarg + 1]);
             iarg += 2;
+        } else if (strcmp(arg[iarg], "rescale_energy") == 0) {
+            iarg += 1;
+            if (iarg == narg) {
+                error->one(FLERR, "expected <on/off> after 'rescale_energy' in fix metatomic, got nothing");
+            } else if (strcmp(arg[iarg], "on") == 0) {
+                this->rescale_energy = true;
+                iarg += 1;
+            } else if (strcmp(arg[iarg], "off") == 0) {
+                this->rescale_energy = false;
+                iarg += 1;
+            } else {
+                error->one(FLERR, "expected <on/off> after 'rescale_energy' in fix metatomic, got '{}'", arg[iarg]);
+            }
         } else {
             error->all(FLERR,
                 "Illegal fix metatomic command: unrecognized option '{}' (expected "
-                "'types', 'device', `extensions_directory`, or `check_consistency`)",
+                "'types', 'device', `extensions_directory`, `check_consistency`, or `rescale_energy`)",
                 arg[iarg]
             );
         }
@@ -199,10 +218,21 @@ FixMetatomic::FixMetatomic(LAMMPS *lmp, int narg, char **arg): Fix(lmp, narg, ar
     const char* v = std::getenv("LAMMPS_METATOMIC_DISABLE_TORCH_JIT_OPTIMIZATION");
     const bool disable = (v != nullptr) && (std::strcmp(v, "1") == 0);
     if (disable) torch::jit::setGraphExecutorOptimize(false);
+
+    // For energy rescaling we need the potential energy every step; let an
+    // internal "compute pe" tally it (the same mechanism fix npt uses for the
+    // virial via an internal compute pressure).
+    if (this->rescale_energy) {
+        this->pe_compute_id = std::string(this->id) + "_pe";
+        this->pe_compute = modify->add_compute(this->pe_compute_id + " all pe");
+    }
 }
 
 FixMetatomic::~FixMetatomic() {
     memory->destroy(type_mapping);
+    if (this->rescale_energy && modify) {
+        modify->delete_compute(this->pe_compute_id);
+    }
 }
 
 /* ---------------------------------------------------------------------- */
@@ -337,6 +367,27 @@ void FixMetatomic::init() {
         neighbor->binsizeflag = 1;
     }
     // END HACK
+
+    if (this->rescale_energy) {
+        this->pe_compute = modify->get_compute_by_id(this->pe_compute_id);
+        if (!this->pe_compute || this->pe_compute->peflag == 0) {
+            error->all(FLERR, "fix metatomic internal error: potential energy compute unavailable");
+        }
+        if (strcmp(force->pair_style, "none") == 0) {
+            error->all(FLERR,
+                "fix metatomic rescale_energy requires a pair_style providing the potential energy"
+            );
+        }
+    }
+}
+
+void FixMetatomic::setup(int /*vflag*/) {
+    // Seed U(q) for the first step and request the energy tally one step ahead.
+    if (this->rescale_energy) {
+        this->pe_compute->compute_scalar();
+        this->rescale_U_old = this->pe_compute->scalar;
+        this->pe_compute->addstep(update->ntimestep + 1);
+    }
 }
 
 void FixMetatomic::pick_device(c10::Device& device, const char* requested) {
@@ -515,6 +566,7 @@ void FixMetatomic::initial_integrate(int /*vflag*/) {
     std::array<double, 3> com_old = {0.0, 0.0, 0.0};
     std::array<double, 3> com_velocity_old = {0.0, 0.0, 0.0};
     double total_mass = 0.0;
+    double k_before = 0.0;  // kinetic energy of the momenta fed to the model
     for (int i = 0; i < nlocal; i++) {
         if (mask[i] & groupbit) {
             double m_i = rmass ? rmass[i] : mass[type[i]];
@@ -525,8 +577,10 @@ void FixMetatomic::initial_integrate(int /*vflag*/) {
             com_velocity_old[1] += v[i][1] * m_i;
             com_velocity_old[2] += v[i][2] * m_i;
             total_mass += m_i;
+            k_before += m_i * (v[i][0]*v[i][0] + v[i][1]*v[i][1] + v[i][2]*v[i][2]);
         }
     }
+    this->rescale_K_before = 0.5 * force->mvv2e * k_before;
     if (total_mass > 0.0) {
         com_old[0] /= total_mass;
         com_old[1] /= total_mass;
@@ -622,6 +676,45 @@ void FixMetatomic::post_force(int /*vflag*/) {
             f[i][2] = 0.0;
         }
     }
+
+    if (!this->rescale_energy) return;
+
+    // FlashMD energy rescaling (App. C): the pair_style energy model has just
+    // evaluated U(q') for the freshly predicted positions; rescale the predicted
+    // momenta so the total energy matches its value before this step. This runs
+    // after the FlashMD map and before final_integrate's thermostat half-step.
+    double **v = atom->v;
+    double *rmass = atom->rmass;
+    double *mass = atom->mass;
+    int *type = atom->type;
+
+    this->pe_compute->compute_scalar();
+    double U_new = this->pe_compute->scalar;
+
+    double k_new = 0.0;
+    for (int i = 0; i < nlocal; i++) {
+        if (mask[i] & groupbit) {
+            double m_i = rmass ? rmass[i] : mass[type[i]];
+            k_new += m_i * (v[i][0]*v[i][0] + v[i][1]*v[i][1] + v[i][2]*v[i][2]);
+        }
+    }
+    k_new *= 0.5 * force->mvv2e;
+
+    double dE = (U_new + k_new) - (this->rescale_U_old + this->rescale_K_before);
+    double radicand = 1.0 - dE / k_new;
+    if (k_new > 0.0 && radicand > 0.0) {
+        double alpha = std::sqrt(radicand);
+        for (int i = 0; i < nlocal; i++) {
+            if (mask[i] & groupbit) {
+                v[i][0] *= alpha;
+                v[i][1] *= alpha;
+                v[i][2] *= alpha;
+            }
+        }
+    }
+
+    this->rescale_U_old = U_new;  // U(q') becomes U(q) for the next step
+    this->pe_compute->addstep(update->ntimestep + 1);
 }
 
 void FixMetatomic::final_integrate() {
