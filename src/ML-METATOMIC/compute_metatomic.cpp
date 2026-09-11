@@ -251,16 +251,8 @@ ComputeMetatomic::ComputeMetatomic(LAMMPS *lmp, int narg, char **arg): Compute(l
     );
 
     auto capabilities = mta_data->model->run_method("capabilities").toCustomClass<metatomic_torch::ModelCapabilitiesHolder>();
-    c10::ScalarType dtype;
-    if (capabilities->dtype() == "float64") {
-        dtype = torch::kFloat64;
-    } else if (capabilities->dtype() == "float32") {
-        dtype = torch::kFloat32;
-    } else {
-        error->all(FLERR,
-            "the model requested an unsupported dtype '" + capabilities->dtype() + "'"
-        );
-    }
+    // validate that the model requests a supported dtype
+    mta_data->model_dtype(lmp);
     auto model_outputs = capabilities->outputs();
     if (!model_outputs.contains(this->output_name)) {
         error->all(FLERR,
@@ -278,14 +270,8 @@ ComputeMetatomic::ComputeMetatomic(LAMMPS *lmp, int narg, char **arg): Compute(l
     this->mta_data->evaluation_options->outputs.insert(this->output_name, this->mta_data->requested_output);
 
     // add the required additional inputs
-    auto requested_inputs = mta_data->model->run_method("requested_inputs", /*use_new_names=*/ true).toGenericDict();
-    for (const auto& entry : requested_inputs) {
-        mta_data->requested_inputs.emplace(
-            entry.key().toStringRef(),
-            entry.value().toCustomClass<metatomic_torch::ModelOutputHolder>()
-        );
-    }
-
+    mta_data->requested_inputs = mta_data->collect_requested_inputs();
+    
     // Initialize the output layout
     if (strcmp(sample_kind.c_str(), "atom") == 0) {
         peratom_flag = 1;
@@ -316,9 +302,10 @@ ComputeMetatomic::ComputeMetatomic(LAMMPS *lmp, int narg, char **arg): Compute(l
 
     // Select the device to use based on the model's preference, the user choice
     // and what's available.
-    this->pick_device(
-        mta_data->device,
-        this->requested_device ? this->requested_device->c_str() : nullptr
+    mta_data->pick_device(
+        lmp,
+        this->requested_device ? this->requested_device->c_str() : nullptr,
+        "compute metatomic"
     );
 
     // move all data to the correct device
@@ -356,27 +343,7 @@ void ComputeMetatomic::init() {
     }
 
     // get the model's interaction range
-    auto range = mta_data->capabilities->engine_interaction_range(mta_data->evaluation_options->length_unit());
-    if (range < 0) {
-        error->all(FLERR, "interaction_range is negative for this model");
-    } else if (!std::isfinite(range)) {
-        if (comm->nprocs > 1) {
-            error->all(FLERR,
-                "interaction_range is infinite for this model, "
-                "using multiple MPI domains is not supported"
-            );
-        }
-
-        // determine the maximal cutoff in the NL
-        auto requested_nl = mta_data->model->run_method("requested_neighbor_lists");
-        for (const auto& ivalue: requested_nl.toList()) {
-            auto options = ivalue.get().toCustomClass<metatomic_torch::NeighborListOptionsHolder>();
-            auto cutoff = options->engine_cutoff(mta_data->evaluation_options->length_unit());
-            mta_data->max_cutoff = std::max(mta_data->max_cutoff, cutoff);
-        }
-    } else {
-        mta_data->max_cutoff = range;
-    }
+    mta_data->resolve_max_cutoff(lmp);
 
     // Initialize metatensor system object
     auto options = MetatomicSystemOptions{
@@ -391,29 +358,7 @@ void ComputeMetatomic::init() {
     // ALL pairs, even if options->full_list() is false. We will then filter
     // the pairs to only include each pair once where needed.
     auto request = neighbor->add_request(this, NeighConst::REQ_FULL | NeighConst::REQ_GHOST);
-    request->set_cutoff(mta_data->max_cutoff);
-
-    auto mincut = mta_data->max_cutoff + neighbor->skin;
-    if (comm->get_comm_cutoff() < mincut) {
-        if (comm->me == 0) {
-            error->warning(FLERR,
-                "Increasing communication cutoff to {:.8} for compute metatomic",
-                mincut
-            );
-        }
-        comm->cutghostuser = mincut;
-    }
-
-    // Translate from the metatomic neighbor lists requests to LAMMPS neighbor
-    // lists requests.
-    auto requested_nl = mta_data->model->run_method("requested_neighbor_lists");
-    for (const auto& ivalue: requested_nl.toList()) {
-        auto options = ivalue.get().toCustomClass<metatomic_torch::NeighborListOptionsHolder>();
-        auto cutoff = options->engine_cutoff(mta_data->evaluation_options->length_unit());
-        assert(cutoff <= mta_data->max_cutoff);
-
-        this->system_adaptor->add_nl_request(cutoff, options);
-    }
+    this->system_adaptor->configure_neighbor_lists(request, mta_data, "compute metatomic");
 
     // HACK: Explicitly set the binsize for the neighbor list if there is no
     // pair_style that would set it instead.
@@ -427,54 +372,6 @@ void ComputeMetatomic::init() {
     // END HACK
 }
 
-void ComputeMetatomic::pick_device(c10::Device& device, const char* requested) {
-    torch::optional<std::string> requested_string;
-    torch::DeviceType device_type;
-
-    if (requested != nullptr) {
-        requested_string = std::string(requested);
-    } else {
-        requested_string = torch::nullopt;
-    }
-
-    try {
-        device_type = metatomic_torch::pick_device(
-            this->mta_data->capabilities->supported_devices,
-            requested_string
-        );
-    } catch (const c10::Error& e) {
-        error->one(FLERR, "compute metatomic: {}", e.what());
-    }
-
-    if (device_type == torch::DeviceType::CUDA) {
-        // distribute GPUs between multiple MPI processes on the same node
-
-        // (1) get a MPI communicator for all processes on the current node
-        MPI_Comm local;
-        MPI_Comm_split_type(world, MPI_COMM_TYPE_SHARED, 0, MPI_INFO_NULL, &local);
-        // (2) get the rank of this MPI process on the current node
-        int local_rank;
-        MPI_Comm_rank(local, &local_rank);
-
-        int size;
-        MPI_Comm_size(local, &size);
-        if (size < torch::cuda::device_count()) {
-            if (comm->me == 0) {
-                error->warning(FLERR,
-                    "found {} CUDA-capable GPUs, but only {} MPI processes on the current node; the remaining GPUs will not be used",
-                    torch::cuda::device_count(), size
-                );
-            }
-        }
-
-        // (3) split GPUs between node-local processes using round-robin allocation
-        auto device_index = local_rank % torch::cuda::device_count();
-        device = torch::Device(device_type, static_cast<torch::DeviceIndex>(device_index));
-    } else {
-        device = torch::Device(device_type);
-    }
-}
-
 void ComputeMetatomic::init_list(int id, NeighList *ptr) {
     mta_list = ptr;
 }
@@ -485,18 +382,9 @@ void ComputeMetatomic::compute() {
         return;
     }
     clear_cache();
-    int nlocal = atom->nlocal;
-    int *mask = atom->mask;
 
     // Determine the dtype of the system based on the model's capabilities
-    auto dtype = torch::kFloat64;
-    if (mta_data->capabilities->dtype() == "float64") {
-        dtype = torch::kFloat64;
-    } else if (mta_data->capabilities->dtype() == "float32") {
-        dtype = torch::kFloat32;
-    } else {
-        error->all(FLERR, "the model requested an unsupported dtype '{}'", mta_data->capabilities->dtype());
-    }
+    auto dtype = mta_data->model_dtype(lmp);
 
     auto system = this->system_adaptor->system_from_lmp(
         mta_list,
@@ -508,20 +396,7 @@ void ComputeMetatomic::compute() {
 
     // Configure selected atoms for evaluation
     // Only run the calculation for atoms in the current group
-    mta_data->selected_atoms_values.resize_({group->count(igroup), 2});
-    mta_data->selected_atoms_values.index_put_({torch::indexing::Slice(), 0}, 0);
-    int64_t idx = 0;
-    for (int i = 0; i < nlocal; i++) {
-        if (mask[i] & groupbit) {
-            mta_data->selected_atoms_values.index_put_({idx, 1}, i);
-            idx++;
-        }
-    }
-
-    auto selected_atoms = torch::make_intrusive<metatensor_torch::LabelsHolder>(
-        std::vector<std::string>{"system", "atom"}, mta_data->selected_atoms_values
-    );
-    mta_data->evaluation_options->set_selected_atoms(selected_atoms);
+    mta_data->set_selected_atoms(atom, groupbit);
 
     // Call the ML model to predict the requested output
     torch::IValue result_ivalue;
