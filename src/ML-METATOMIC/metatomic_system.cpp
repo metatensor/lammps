@@ -222,17 +222,17 @@ static std::array<int32_t, 3> cell_shifts(
 ) {
     auto shift_a = static_cast<int32_t>(std::round(
         cell_inv[0][0] * pair_shift[0] +
-        cell_inv[0][1] * pair_shift[1] +
-        cell_inv[0][2] * pair_shift[2]
+        cell_inv[1][0] * pair_shift[1] +
+        cell_inv[2][0] * pair_shift[2]
     ));
     auto shift_b = static_cast<int32_t>(std::round(
-        cell_inv[1][0] * pair_shift[0] +
+        cell_inv[0][1] * pair_shift[0] +
         cell_inv[1][1] * pair_shift[1] +
-        cell_inv[1][2] * pair_shift[2]
+        cell_inv[2][1] * pair_shift[2]
     ));
     auto shift_c = static_cast<int32_t>(std::round(
-        cell_inv[2][0] * pair_shift[0] +
-        cell_inv[2][1] * pair_shift[1] +
+        cell_inv[0][2] * pair_shift[0] +
+        cell_inv[1][2] * pair_shift[1] +
         cell_inv[2][2] * pair_shift[2]
     ));
 
@@ -315,13 +315,25 @@ void MetatomicSystemAdaptor::guess_periodic_ghosts() {
     // GPU) because ghost positions depend only on the original atom
     // position and exact cell-vector shifts — both of which are
     // order-independent. Picking the closest ghost also gives the most
-    // natural representative for cell-shift calculations.
-
-    double center[3] = {
-        0.5 * (domain->sublo[0] + domain->subhi[0]),
-        0.5 * (domain->sublo[1] + domain->subhi[1]),
-        0.5 * (domain->sublo[2] + domain->subhi[2])
-    };
+    // natural representative for cell-shift calculations.  
+    double center[3];
+    if (domain->triclinic == 0) {
+        center[0] = 0.5 * (domain->sublo[0] + domain->subhi[0]);
+        center[1] = 0.5 * (domain->sublo[1] + domain->subhi[1]);
+        center[2] = 0.5 * (domain->sublo[2] + domain->subhi[2]);
+    } else {
+        // For triclinic boxes, domain->sublo/subhi are not set (see
+        // Domain::set_local_box, which returns early). The subdomain
+        // bounds are stored in reduced coordinates instead; since
+        // lamda2x is affine, the midpoint in lamda maps onto the
+        // center of the Cartesian parallelepiped.
+        double center_lamda[3] = {
+            0.5 * (domain->sublo_lamda[0] + domain->subhi_lamda[0]),
+            0.5 * (domain->sublo_lamda[1] + domain->subhi_lamda[1]),
+            0.5 * (domain->sublo_lamda[2] + domain->subhi_lamda[2])
+        };
+        domain->lamda2x(center_lamda, center);
+    }
 
     // We do the first pass over ghost atoms to find the representative for
     // for each tag, then a second pass to build the mapping arrays. This ensures
