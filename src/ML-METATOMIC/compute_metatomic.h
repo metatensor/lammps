@@ -21,6 +21,7 @@ ComputeStyle(metatomic, ComputeMetatomic);
 
 #include "compute.h"
 
+#include <memory>
 #include <optional>
 
 namespace c10 {
