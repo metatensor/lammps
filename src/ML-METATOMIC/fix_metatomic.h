@@ -54,8 +54,6 @@ public:
     void init_list(int id, NeighList *ptr) override;
 
  protected:
-    virtual void pick_device(c10::Device& device, const char* requested);
-
     double momentum_conversion_factor;    // Conversion factor for momenta
     double dt;                            // Timestep
     std::string model_path;               // Path to ML model file

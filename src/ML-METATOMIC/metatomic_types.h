@@ -13,6 +13,7 @@
 
 #include "lammps.h"
 
+#include <map>
 #include <string>
 
 #include <torch/torch.h>
@@ -25,9 +26,30 @@
 
 namespace LAMMPS_NS {
 
+class Atom;
+
 struct CommonMetatomicData {
    CommonMetatomicData(std::string length_unit);
    void load_model(LAMMPS* lmp, const char* path, const char* extensions_directory);
+
+   // pick the compute device from the model's supported devices and the user
+   // request (or nullptr), storing the result in `this->device`. `cmd_name` is
+   // used as a prefix in error messages (e.g. "pair_style metatomic").
+   void pick_device(LAMMPS* lmp, const char* requested, const char* cmd_name);
+
+   // resolve the torch dtype (float32/float64) requested by the model
+   c10::ScalarType model_dtype(LAMMPS* lmp) const;
+
+   // compute `this->max_cutoff` from the model's interaction range, falling
+   // back to the requested neighbor lists when the range is infinite
+   void resolve_max_cutoff(LAMMPS* lmp);
+
+   // set the selected atoms in the evaluation options according to the request of lmp,
+   // build selected atoms on CPU, then copy to device
+   void set_selected_atoms(Atom* atom, int groupbit);
+
+   // collect the additional inputs requested by the model
+   std::map<std::string, metatomic_torch::ModelOutput> collect_requested_inputs() const;
 
    // the metatomic model
    std::unique_ptr<metatensor_torch::Module> model;

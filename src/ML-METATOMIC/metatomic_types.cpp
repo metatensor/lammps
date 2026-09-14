@@ -16,9 +16,15 @@
 ------------------------------------------------------------------------- */
 #include "metatomic_types.h"
 
+#include "atom.h"
 #include "citeme.h"
 #include "comm.h"
 #include "error.h"
+
+#include <algorithm>
+#include <cmath>
+
+#include <torch/cuda.h>
 
 using namespace LAMMPS_NS;
 
@@ -81,4 +87,129 @@ void CommonMetatomicData::load_model(
           }
        }
    }
+}
+
+void CommonMetatomicData::pick_device(LAMMPS* lmp, const char* requested, const char* cmd_name) {
+    torch::optional<std::string> requested_string;
+    if (requested != nullptr) {
+        requested_string = std::string(requested);
+    } else {
+        requested_string = torch::nullopt;
+    }
+
+    torch::DeviceType device_type;
+    try {
+        device_type = metatomic_torch::pick_device(
+            this->capabilities->supported_devices,
+            requested_string
+        );
+    } catch (const c10::Error& e) {
+        lmp->error->one(FLERR, "{}: {}", cmd_name, e.what());
+    }
+
+    if (device_type == torch::DeviceType::CUDA) {
+        // distribute GPUs between multiple MPI processes on the same node
+
+        // (1) get a MPI communicator for all processes on the current node
+        MPI_Comm local;
+        MPI_Comm_split_type(lmp->world, MPI_COMM_TYPE_SHARED, 0, MPI_INFO_NULL, &local);
+        // (2) get the rank of this MPI process on the current node
+        int local_rank;
+        MPI_Comm_rank(local, &local_rank);
+
+        int size;
+        MPI_Comm_size(local, &size);
+        if (size < torch::cuda::device_count()) {
+            if (lmp->comm->me == 0) {
+                lmp->error->warning(FLERR,
+                    "found {} CUDA-capable GPUs, but only {} MPI processes on the current node; the remaining GPUs will not be used",
+                    torch::cuda::device_count(), size
+                );
+            }
+        }
+
+        // (3) split GPUs between node-local processes using round-robin allocation
+        auto device_index = local_rank % torch::cuda::device_count();
+        this->device = torch::Device(device_type, static_cast<torch::DeviceIndex>(device_index));
+    } else {
+        this->device = torch::Device(device_type);
+    }
+}
+
+c10::ScalarType CommonMetatomicData::model_dtype(LAMMPS* lmp) const {
+    const auto dtype = this->capabilities->dtype();
+    if (dtype == "float64") {
+        return torch::kFloat64;
+    } else if (dtype == "float32") {
+        return torch::kFloat32;
+    } else {
+        lmp->error->all(FLERR, "the model requested an unsupported dtype '{}'", dtype);
+    }
+    return torch::kFloat64;  // unreachable, error->all does not return
+}
+
+void CommonMetatomicData::resolve_max_cutoff(LAMMPS* lmp) {
+    // get the model's interaction range
+    auto range = this->capabilities->engine_interaction_range(this->evaluation_options->length_unit());
+    if (range < 0) {
+        lmp->error->all(FLERR, "interaction_range is negative for this model");
+    } else if (!std::isfinite(range)) {
+        if (lmp->comm->nprocs > 1) {
+            lmp->error->all(FLERR,
+                "interaction_range is infinite for this model, "
+                "using multiple MPI domains is not supported"
+            );
+        }
+
+        // determine the maximal cutoff in the NL
+        auto requested_nl = this->model->run_method("requested_neighbor_lists");
+        for (const auto& ivalue: requested_nl.toList()) {
+            auto options = ivalue.get().toCustomClass<metatomic_torch::NeighborListOptionsHolder>();
+            auto cutoff = options->engine_cutoff(this->evaluation_options->length_unit());
+            this->max_cutoff = std::max(this->max_cutoff, cutoff);
+        }
+    } else {
+        this->max_cutoff = range;
+    }
+}
+
+void CommonMetatomicData::set_selected_atoms(Atom* atom, int groupbit) {
+    int nlocal = atom->nlocal;
+    int *mask = atom->mask;
+
+    int64_t n_selected = 0;
+    for (int i = 0; i < nlocal; i++) {
+        if (mask[i] & groupbit) {
+            n_selected++;
+        }
+    }
+    this->selected_atoms_values_cpu.resize_({n_selected, 2});
+    auto accessor = this->selected_atoms_values_cpu.accessor<int32_t, 2>();
+    int64_t idx = 0;
+    for (int i = 0; i < nlocal; i++) {
+        if (mask[i] & groupbit) {
+            accessor[idx][0] = 0;
+            accessor[idx][1] = i;
+            idx++;
+        }
+    }
+    this->selected_atoms_values.resize_({n_selected, 2});
+    this->selected_atoms_values.copy_(this->selected_atoms_values_cpu);
+
+    auto selected_atoms = torch::make_intrusive<metatensor_torch::LabelsHolder>(
+        std::vector<std::string>{"system", "atom"}, this->selected_atoms_values
+    );
+    this->evaluation_options->set_selected_atoms(selected_atoms);
+}
+
+std::map<std::string, metatomic_torch::ModelOutput> CommonMetatomicData::collect_requested_inputs() const {
+    std::map<std::string, metatomic_torch::ModelOutput> input_holders;
+    auto requested_inputs = this->model->run_method("requested_inputs", /*use_new_names=*/ true).toGenericDict();
+    for (const auto& entry : requested_inputs) {
+        input_holders.emplace(
+            entry.key().toStringRef(),
+            entry.value().toCustomClass<metatomic_torch::ModelOutputHolder>()
+        );
+    }
+    return input_holders;
 }

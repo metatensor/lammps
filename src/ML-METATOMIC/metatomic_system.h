@@ -27,6 +27,8 @@
 
 namespace LAMMPS_NS {
 
+struct CommonMetatomicData;
+
 struct MetatomicSystemOptions {
     // Mapping from LAMMPS types to metatomic types.
     // If used with kokkos, this should be a device pointer
@@ -67,6 +69,8 @@ public:
     virtual void add_nl_request(
         double cutoff, metatomic_torch::NeighborListOptions request
     );
+
+    virtual void configure_neighbor_lists(NeighRequest* request, CommonMetatomicData* mta_data, const char* requester);
 
     // Create a metatomic system matching the LAMMPS system data
     virtual metatomic_torch::System system_from_lmp(

@@ -48,7 +48,6 @@ public:
     void compute_peratom() override;
 
 protected:
-    virtual void pick_device(c10::Device& device, const char* requested);
     std::string model_path;
     std::optional<std::string> requested_device;
     std::optional<std::string> extensions_directory;
