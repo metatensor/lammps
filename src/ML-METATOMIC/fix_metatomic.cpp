@@ -180,7 +180,7 @@ FixMetatomic::FixMetatomic(LAMMPS *lmp, int narg, char **arg): Fix(lmp, narg, ar
         /*explicit_gradients =*/ std::vector<std::string>{},
         /*description =*/ ""
     );
-    this->mta_data->evaluation_options->outputs.insert("positions", positions);
+    this->mta_data->evaluation_options->outputs.insert("position", positions);
 
     auto momenta = torch::make_intrusive<metatomic_torch::ModelOutputHolder>(
         /*quantity =*/ "",
@@ -189,7 +189,7 @@ FixMetatomic::FixMetatomic(LAMMPS *lmp, int narg, char **arg): Fix(lmp, narg, ar
         /*explicit_gradients =*/ std::vector<std::string>{},
         /*description =*/ ""
     );
-    this->mta_data->evaluation_options->outputs.insert("momenta", momenta);
+    this->mta_data->evaluation_options->outputs.insert("momentum", momenta);
 
     // dynamic fusion strategy for torch::jit
     torch::jit::FusionStrategy strategy = {{torch::jit::FusionBehavior::DYNAMIC, 10}};
@@ -370,7 +370,7 @@ void FixMetatomic::initial_integrate(int /*vflag*/) {
     auto result = result_ivalue.toGenericDict();
 
     // Extract predicted positions
-    auto positions_map = result.at("positions").toCustomClass<metatensor_torch::TensorMapHolder>();
+    auto positions_map = result.at("position").toCustomClass<metatensor_torch::TensorMapHolder>();
     auto positions_block = metatensor_torch::TensorMapHolder::block_by_id(positions_map, 0);
     auto positions = positions_block->values().squeeze(-1).to(torch::kCPU).to(torch::kFloat64);
     auto positions_samples = positions_block->samples()->values().to(torch::kCPU).contiguous();
@@ -379,7 +379,7 @@ void FixMetatomic::initial_integrate(int /*vflag*/) {
     assert(positions_block->samples()->names()[1] == "atom");
 
     // Extract predicted momenta
-    auto momenta_map = result.at("momenta").toCustomClass<metatensor_torch::TensorMapHolder>();
+    auto momenta_map = result.at("momentum").toCustomClass<metatensor_torch::TensorMapHolder>();
     auto momenta_block = metatensor_torch::TensorMapHolder::block_by_id(momenta_map, 0);
     auto momenta = momenta_block->values().squeeze(-1).to(torch::kCPU).to(torch::kFloat64);
 
