@@ -477,6 +477,13 @@ void FixMetatomic::initial_integrate(int /*vflag*/) {
     }
 }
 
+void FixMetatomic::setup(int vflag) {
+    // Zero the forces computed during setup, as post_force() does every step.
+    // Otherwise initial_integrate() applies them as a velocity kick on the
+    // first step of every run.
+    post_force(vflag);
+}
+
 void FixMetatomic::post_force(int /*vflag*/) {
     // Set the forces that comes from pair_style, bond_style, etc. to zero.
     //

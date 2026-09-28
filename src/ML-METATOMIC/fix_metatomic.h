@@ -46,6 +46,7 @@ public:
 
     int setmask() override;
     void init() override;
+    void setup(int) override;
 
     // Integration methods for ML-driven dynamics
     void initial_integrate(int) override;  // ML prediction of positions/momenta
