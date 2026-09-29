@@ -1,0 +1,38 @@
+units metal
+boundary p p p
+
+atom_style atomic
+lattice fcc 3.6
+region box block 0 2 0 2 0 2
+create_box 1 box
+create_atoms 1 box
+
+mass 1 58.693
+
+velocity all create 123 42
+
+pair_style metatomic nickel-lj.pt uncertainty_threshold off
+pair_coeff * * 28
+
+
+timestep 0.001
+fix 1 all npt temp 123 123 $(100 * dt) iso 0 0 $(1000 * dt) drag 1.0
+
+compute energy all metatomic nickel-lj.pt energy check_consistency on types 28
+
+# use the `doubled` variant
+compute energy_doubled all metatomic nickel-lj.pt energy/doubled types 28
+
+compute heat_flux all metatomic nickel-lj-heat-flux.pt heat_flux extensions_directory collected-heat-flux-extensions types 28
+
+# use the `doubled` variant
+compute heat_flux_doubled all metatomic nickel-lj-heat-flux.pt heat_flux/doubled extensions_directory collected-heat-flux-extensions types 28
+
+compute forces all metatomic nickel-lj.pt non_conservative_force types 28
+
+thermo 10
+thermo_style custom step temp pe etotal press vol c_heat_flux[1] c_heat_flux[2] c_heat_flux[3] c_heat_flux_doubled[1] c_heat_flux_doubled[2] c_heat_flux_doubled[3]
+
+dump 1 all custom 10 dump.compute_metatomic id type x y z c_energy c_energy_doubled c_forces[1] c_forces[2] c_forces[3]
+
+run 30

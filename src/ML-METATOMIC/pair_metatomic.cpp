@@ -37,13 +37,16 @@
     #include <torch/mps.h>
 #endif
 
+#include <map>
 #include <memory>
+#include <string>
 
 #include <metatensor/torch.hpp>
 #include <metatomic/torch.hpp>
 
 #include "metatomic_system.h"
 #include "metatomic_timer.h"
+#include "metatomic_quantities.h"
 
 using namespace LAMMPS_NS;
 
@@ -72,21 +75,11 @@ PairMetatomic::PairMetatomic(LAMMPS *lmp):
     system_adaptor(nullptr),
     scale(1.0)
 {
-    if (strcmp(update->unit_style, "real") == 0) {
-        this->length_unit = "angstrom";
-        this->energy_unit = "kcal/mol";
-    } else if (strcmp(update->unit_style, "metal") == 0) {
-        this->length_unit = "angstrom";
-        this->energy_unit = "eV";
-    } else if (strcmp(update->unit_style, "si") == 0) {
-        this->length_unit = "meter";
-        this->energy_unit = "joule";
-    } else if (strcmp(update->unit_style, "electron") == 0) {
-        this->length_unit = "Bohr";
-        this->energy_unit = "Hartree";
-    } else {
+    if (strcmp(update->unit_style, "lj") == 0) {
         error->one(FLERR, "unsupported units '{}' for pair metatomic ", update->unit_style);
     }
+    this->length_unit = metatomic_unit_map.at("position").at(update->unit_style);
+    this->energy_unit = metatomic_unit_map.at("energy").at(update->unit_style);
 
     // we might not be running a pure pair potential,
     // so we can not compute virial as fdotr
@@ -407,7 +400,7 @@ void PairMetatomic::settings(int argc, char ** argv) {
 
     // Select the device to use based on the model's preference, the user choice
     // and what's available.
-    this->pick_device(mta_data->device, requested_device);
+    mta_data->pick_device(lmp, requested_device, "pair_style metatomic");
 
     // move all data to the correct device
     mta_data->model->to(mta_data->device);
@@ -423,54 +416,6 @@ void PairMetatomic::settings(int argc, char ** argv) {
 
     if (!allocated) {
         allocate();
-    }
-}
-
-void PairMetatomic::pick_device(torch::Device& device, const char* requested) {
-    torch::optional<std::string> requested_string;
-    torch::DeviceType device_type;
-
-    if (requested != nullptr) {
-        requested_string = std::string(requested);
-    } else {
-        requested_string = torch::nullopt;
-    }
-
-    try {
-        device_type = metatomic_torch::pick_device(
-            this->mta_data->capabilities->supported_devices,
-            requested_string
-        );
-    } catch (const c10::Error& e) {
-        error->one(FLERR, "pair_style metatomic: {}", e.what());
-    }
-
-    if (device_type == torch::DeviceType::CUDA) {
-        // distribute GPUs between multiple MPI processes on the same node
-
-        // (1) get a MPI communicator for all processes on the current node
-        MPI_Comm local;
-        MPI_Comm_split_type(world, MPI_COMM_TYPE_SHARED, 0, MPI_INFO_NULL, &local);
-        // (2) get the rank of this MPI process on the current node
-        int local_rank;
-        MPI_Comm_rank(local, &local_rank);
-
-        int size;
-        MPI_Comm_size(local, &size);
-        if (size < torch::cuda::device_count()) {
-            if (comm->me == 0) {
-                error->warning(FLERR,
-                    "found {} CUDA-capable GPUs, but only {} MPI processes on the current node; the remaining GPUs will not be used",
-                    torch::cuda::device_count(), size
-                );
-            }
-        }
-
-        // (3) split GPUs between node-local processes using round-robin allocation
-        auto device_index = local_rank % torch::cuda::device_count();
-        device = torch::Device(device_type, static_cast<torch::DeviceIndex>(device_index));
-    } else {
-        device = torch::Device(device_type);
     }
 }
 
@@ -557,28 +502,7 @@ void PairMetatomic::init_style() {
     }
 
     // get the model's interaction range
-    auto range = mta_data->capabilities->engine_interaction_range(mta_data->evaluation_options->length_unit());
-    if (range < 0) {
-        error->one(FLERR, "interaction_range is negative for this model");
-    } else if (!std::isfinite(range)) {
-        if (comm->nprocs > 1) {
-            error->one(FLERR,
-                "interaction_range is infinite for this model, "
-                "using multiple MPI domains is not supported"
-            );
-        }
-
-        // determine the maximal cutoff in the NL
-        auto requested_nl = mta_data->model->run_method("requested_neighbor_lists");
-        for (const auto& ivalue: requested_nl.toList()) {
-            auto options = ivalue.get().toCustomClass<metatomic_torch::NeighborListOptionsHolder>();
-            auto cutoff = options->engine_cutoff(mta_data->evaluation_options->length_unit());
-
-            mta_data->max_cutoff = std::max(mta_data->max_cutoff, cutoff);
-        }
-    } else {
-        mta_data->max_cutoff = range;
-    }
+    mta_data->resolve_max_cutoff(lmp);
 
     if (!std::isfinite(mta_data->max_cutoff)) {
         error->one(FLERR,
@@ -600,18 +524,7 @@ void PairMetatomic::init_style() {
     // ALL pairs, even if options->full_list() is false. We will then filter
     // the pairs to only include each pair once where needed.
     auto request = neighbor->add_request(this, NeighConst::REQ_FULL | NeighConst::REQ_GHOST);
-    request->set_cutoff(mta_data->max_cutoff);
-
-    // Translate from the metatomic neighbor lists requests to LAMMPS neighbor
-    // lists requests.
-    auto requested_nl = mta_data->model->run_method("requested_neighbor_lists");
-    for (const auto& ivalue: requested_nl.toList()) {
-        auto options = ivalue.get().toCustomClass<metatomic_torch::NeighborListOptionsHolder>();
-        auto cutoff = options->engine_cutoff(mta_data->evaluation_options->length_unit());
-        assert(cutoff <= mta_data->max_cutoff);
-
-        this->system_adaptor->add_nl_request(cutoff, options);
-    }
+    this->system_adaptor->configure_neighbor_lists(request, mta_data, "pair metatomic");
 }
 
 void PairMetatomic::init_list(int id, NeighList *ptr) {
@@ -669,38 +582,23 @@ void PairMetatomic::compute(int eflag, int vflag) {
         mta_data->evaluation_options->outputs.insert(mta_data->nc_stress_key, mta_data->nc_stress_output);
     }
 
-    auto dtype = torch::kFloat64;
-    if (mta_data->capabilities->dtype() == "float64") {
-        dtype = torch::kFloat64;
-    } else if (mta_data->capabilities->dtype() == "float32") {
-        dtype = torch::kFloat32;
-    } else {
-        error->one(FLERR, "the model requested an unsupported dtype '{}'", mta_data->capabilities->dtype());
-    }
+    auto dtype = mta_data->model_dtype(lmp);
+
+    // deal with the model requested inputs
+    auto input_holders = mta_data->collect_requested_inputs();
 
     // transform from LAMMPS to metatomic System
     auto system = this->system_adaptor->system_from_lmp(
         mta_list,
         vflag_global && !do_nc_stress,
         dtype,
-        mta_data->device
+        mta_data->device,
+        input_holders
     );
 
-    // only run the calculation for atoms actually in the current domain
-    mta_data->selected_atoms_values.resize_({atom->nlocal, 2});
-    mta_data->selected_atoms_values.index_put_({torch::indexing::Slice(), 0}, 0);
-    auto options = mta_data->selected_atoms_values.options();
-    mta_data->selected_atoms_values.index_put_(
-        {torch::indexing::Slice(), 1},
-        torch::arange(atom->nlocal, options)
-    );
-
-    auto selected_atoms = torch::make_intrusive<metatensor_torch::LabelsHolder>(
-        std::vector<std::string>{"system", "atom"},
-        mta_data->selected_atoms_values,
-        metatensor::assume_unique{}
-    );
-    mta_data->evaluation_options->set_selected_atoms(selected_atoms);
+    // only include atoms in the "all" group; atoms temporarily removed from
+    // the all group (e.g. by fix_gcmc) are excluded.
+    mta_data->set_selected_atoms(atom, 1);
 
     torch::IValue results_ivalue;
     try {
@@ -716,8 +614,10 @@ void PairMetatomic::compute(int eflag, int vflag) {
 
     auto results = results_ivalue.toGenericDict();
 
-    // check the max uncertainty
-    if (mta_data->uncertainty_output != nullptr) {
+    // check the max uncertainty (only when the energy was actually requested: in
+    // non-conservative mode on steps without energy output, the model does not
+    // compute the energy or its uncertainty, so `energy_uq_key` is absent).
+    if (results.contains(mta_data->energy_uq_key)) {
         auto uncertainty = results.at(mta_data->energy_uq_key).toCustomClass<metatensor_torch::TensorMapHolder>();
         auto uncertainty_block = metatensor_torch::TensorMapHolder::block_by_id(uncertainty, 0);
         assert(uncertainty_block->values().sizes().size() == 2);

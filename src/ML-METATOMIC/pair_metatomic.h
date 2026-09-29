@@ -64,10 +64,6 @@ public:
     virtual void store_forces(const at::Tensor& forces_tensor);
 
 protected:
-    // pick the correct device to use from the user request (or nullptr) in
-    // `pair_style metatomic`
-    virtual void pick_device(c10::Device& device, const char* requested);
-
     PairMetatomicData* mta_data;
     NeighList *mta_list;
 

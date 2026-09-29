@@ -202,13 +202,14 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/) {
         mta_list,
         static_cast<bool>(vflag_global),
         dtype,
-        mta_data->device
+        mta_data->device,
+        /*requested_inputs=*/{} // we handle extra inputs below
     );
 
     // add the required additional inputs, for now FlashMD uses the old names
     // and does not go through the requested_inputs mechanism.
-    this->system_adaptor->add_masses(system, "masses", 1.0);
-    this->system_adaptor->add_momenta(system, "momenta", this->momentum_conversion_factor);
+    this->system_adaptor->add_masses(system, "mass");
+    this->system_adaptor->add_momenta(system, "momentum");
 
     // Configure selected atoms for evaluation
     // Only run the calculation for atoms in the current group
@@ -252,7 +253,7 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/) {
     auto result = result_ivalue.toGenericDict();
 
     // Extract predicted positions (keep on device)
-    auto positions_map = result.at("positions").toCustomClass<metatensor_torch::TensorMapHolder>();
+    auto positions_map = result.at("position").toCustomClass<metatensor_torch::TensorMapHolder>();
     auto positions_block = metatensor_torch::TensorMapHolder::block_by_id(positions_map, 0);
     auto positions = positions_block->values().squeeze(-1).to(mta_data->device).to(torch::kFloat64).contiguous();
     auto positions_samples = positions_block->samples()->values().contiguous();
@@ -262,7 +263,7 @@ void FixMetatomicKokkos<DeviceType>::initial_integrate(int /*vflag*/) {
 
 
     // Extract predicted momenta (keep on device)
-    auto momenta_map = result.at("momenta").toCustomClass<metatensor_torch::TensorMapHolder>();
+    auto momenta_map = result.at("momentum").toCustomClass<metatensor_torch::TensorMapHolder>();
     auto momenta_block = metatensor_torch::TensorMapHolder::block_by_id(momenta_map, 0);
     auto momenta = momenta_block->values().squeeze(-1).to(mta_data->device).to(torch::kFloat64);
 

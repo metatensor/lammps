@@ -106,11 +106,13 @@ public:
         NeighList* list,
         bool do_virial,
         torch::ScalarType dtype,
-        torch::Device device
+        torch::Device device,
+        const std::map<std::string, torch::intrusive_ptr<metatomic_torch::ModelOutputHolder>>& requested_inputs
     ) override;
 
-    void add_masses(metatomic_torch::System& system, std::string name, double unit_conversion) override;
-    void add_momenta(metatomic_torch::System& system, std::string name, double unit_conversion) override;
+    void add_masses(metatomic_torch::System& system, std::string name) override;
+    void add_momenta(metatomic_torch::System& system, std::string name) override;
+    void add_velocities(metatomic_torch::System& system, std::string name) override;
 
     void setup_neighbors_kk(metatomic_torch::System& system, NeighListKokkos<DeviceType>* list);
 

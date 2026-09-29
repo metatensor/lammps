@@ -25,6 +25,7 @@
 ------------------------------------------------------------------------- */
 #include "metatomic_types.h"
 #include "metatomic_system.h"
+#include "metatomic_quantities.h"
 
 #include "fix_metatomic.h"
 
@@ -63,26 +64,15 @@ FixMetatomic::FixMetatomic(LAMMPS *lmp, int narg, char **arg): Fix(lmp, narg, ar
     }
 
     // Determine unit system for the ML model
-    // Currently only 'metal' units are fully supported for momenta
-    std::string energy_unit;
-    std::string length_unit;
-    if (strcmp(update->unit_style, "metal") == 0) {
-        length_unit = "angstrom";
-        this->momentum_conversion_factor = 10.1805057179 / 1000.0;
-    } else if (strcmp(update->unit_style, "real") == 0) {
-        length_unit = "angstrom";
-        this->momentum_conversion_factor = 10.1805057179;
-    } else if (strcmp(update->unit_style, "si") == 0) {
-        length_unit = "m";
-        this->momentum_conversion_factor = 10.1805057179 / 1.6605390666e-22;
-    } else {
+    if (strcmp(update->unit_style, "lj") == 0) {
         error->all(FLERR, "unsupported units '{}' for fix metatomic", update->unit_style);
     }
-
-    // For now, only metal units are fully tested and supported
-    if (strcmp(update->unit_style, "metal") != 0) {
-        error->all(FLERR, "fix metatomic currently only supports 'metal' units");
-    }
+    std::string energy_unit= metatomic_unit_map.at("energy").at(update->unit_style);
+    std::string length_unit = metatomic_unit_map.at("position").at(update->unit_style);
+    std::string mass_unit = metatomic_unit_map.at("mass").at(update->unit_style);
+    std::string velocity_unit = metatomic_unit_map.at("velocity").at(update->unit_style);
+    std::string momentum_unit = mass_unit + "*" + velocity_unit;
+    this->momentum_conversion_factor = metatomic_torch::unit_conversion_factor(momentum_unit, "(u*eV)^(1/2)");
 
     if (narg < 4) {
         error->all(FLERR,
@@ -200,6 +190,12 @@ FixMetatomic::FixMetatomic(LAMMPS *lmp, int narg, char **arg): Fix(lmp, narg, ar
         type_mapping[i] = parsed_types[i - 1];
     }
 
+    mta_data->load_model(
+        this->lmp,
+        this->model_path.c_str(),
+        this->extensions_directory ? this->extensions_directory->c_str() : nullptr
+    );
+
 
     // FlashMD needs position change delta-q and momenta p
     auto positions = torch::make_intrusive<metatomic_torch::ModelOutputHolder>(
@@ -209,7 +205,7 @@ FixMetatomic::FixMetatomic(LAMMPS *lmp, int narg, char **arg): Fix(lmp, narg, ar
         /*explicit_gradients =*/ std::vector<std::string>{},
         /*description =*/ ""
     );
-    this->mta_data->evaluation_options->outputs.insert("positions", positions);
+    this->mta_data->evaluation_options->outputs.insert("position", positions);
 
     auto momenta = torch::make_intrusive<metatomic_torch::ModelOutputHolder>(
         /*quantity =*/ "",
@@ -218,7 +214,7 @@ FixMetatomic::FixMetatomic(LAMMPS *lmp, int narg, char **arg): Fix(lmp, narg, ar
         /*explicit_gradients =*/ std::vector<std::string>{},
         /*description =*/ ""
     );
-    this->mta_data->evaluation_options->outputs.insert("momenta", momenta);
+    this->mta_data->evaluation_options->outputs.insert("momentum", momenta);
 
     // dynamic fusion strategy for torch::jit
     torch::jit::FusionStrategy strategy = {{torch::jit::FusionBehavior::DYNAMIC, 10}};
@@ -272,12 +268,6 @@ void FixMetatomic::init() {
         error->all(FLERR, "fix metatomic internal error: type_mapping not initialized");
     }
 
-    mta_data->load_model(
-        this->lmp,
-        this->model_path.c_str(),
-        this->extensions_directory ? this->extensions_directory->c_str() : nullptr
-    );
-
     double model_timestep = mta_data->model->attr("module").toModule().attr("timestep").toTensor().item<double>();
     model_timestep = model_timestep * 1e-3;  // fs to ps (metal units)
     if (std::abs(update->dt - model_timestep) > 1e-5 * model_timestep) {
@@ -289,9 +279,10 @@ void FixMetatomic::init() {
 
     // Select the device to use based on the model's preference, the user choice
     // and what's available.
-    this->pick_device(
-        mta_data->device,
-        this->requested_device ? this->requested_device->c_str() : nullptr
+    mta_data->pick_device(
+        lmp,
+        this->requested_device ? this->requested_device->c_str() : nullptr,
+        "fix metatomic"
     );
 
     // move all data to the correct device
@@ -307,28 +298,7 @@ void FixMetatomic::init() {
     }
 
     // get the model's interaction range
-    auto range = mta_data->capabilities->engine_interaction_range(mta_data->evaluation_options->length_unit());
-    if (range < 0) {
-        error->all(FLERR, "interaction_range is negative for this model");
-    } else if (!std::isfinite(range)) {
-        if (comm->nprocs > 1) {
-            error->all(FLERR,
-                "interaction_range is infinite for this model, "
-                "using multiple MPI domains is not supported"
-            );
-        }
-
-        // determine the maximal cutoff in the NL
-        auto requested_nl = mta_data->model->run_method("requested_neighbor_lists");
-        for (const auto& ivalue: requested_nl.toList()) {
-            auto options = ivalue.get().toCustomClass<metatomic_torch::NeighborListOptionsHolder>();
-            auto cutoff = options->engine_cutoff(mta_data->evaluation_options->length_unit());
-
-            mta_data->max_cutoff = std::max(mta_data->max_cutoff, cutoff);
-        }
-    } else {
-        mta_data->max_cutoff = range;
-    }
+    mta_data->resolve_max_cutoff(lmp);
 
     // Initialize metatensor system object
     auto options = MetatomicSystemOptions{
@@ -343,29 +313,7 @@ void FixMetatomic::init() {
     // ALL pairs, even if options->full_list() is false. We will then filter
     // the pairs to only include each pair once where needed.
     auto request = neighbor->add_request(this, NeighConst::REQ_FULL | NeighConst::REQ_GHOST);
-    request->set_cutoff(mta_data->max_cutoff);
-
-    auto mincut = mta_data->max_cutoff + neighbor->skin;
-    if (comm->get_comm_cutoff() < mincut) {
-        if (comm->me == 0) {
-            error->warning(FLERR,
-                "Increasing communication cutoff to {:.8} for fix metatomic",
-                mincut
-            );
-        }
-        comm->cutghostuser = mincut;
-    }
-
-    // Translate from the metatomic neighbor lists requests to LAMMPS neighbor
-    // lists requests.
-    auto requested_nl = mta_data->model->run_method("requested_neighbor_lists");
-    for (const auto& ivalue: requested_nl.toList()) {
-        auto options = ivalue.get().toCustomClass<metatomic_torch::NeighborListOptionsHolder>();
-        auto cutoff = options->engine_cutoff(mta_data->evaluation_options->length_unit());
-        assert(cutoff <= mta_data->max_cutoff);
-
-        this->system_adaptor->add_nl_request(cutoff, options);
-    }
+    this->system_adaptor->configure_neighbor_lists(request, mta_data, "fix metatomic");
 
     // HACK: Explicitly set the binsize for the neighbor list if there is no
     // pair_style that would set it instead.
@@ -397,54 +345,6 @@ void FixMetatomic::setup(int /*vflag*/) {
         this->pe_compute->compute_scalar();
         this->rescale_U_old = this->pe_compute->scalar;
         this->pe_compute->addstep(update->ntimestep + 1);
-    }
-}
-
-void FixMetatomic::pick_device(c10::Device& device, const char* requested) {
-    torch::optional<std::string> requested_string;
-    torch::DeviceType device_type;
-
-    if (requested != nullptr) {
-        requested_string = std::string(requested);
-    } else {
-        requested_string = torch::nullopt;
-    }
-
-    try {
-        device_type = metatomic_torch::pick_device(
-            this->mta_data->capabilities->supported_devices,
-            requested_string
-        );
-    } catch (const c10::Error& e) {
-        error->one(FLERR, "fix metatomic: {}", e.what());
-    }
-
-    if (device_type == torch::DeviceType::CUDA) {
-        // distribute GPUs between multiple MPI processes on the same node
-
-        // (1) get a MPI communicator for all processes on the current node
-        MPI_Comm local;
-        MPI_Comm_split_type(world, MPI_COMM_TYPE_SHARED, 0, MPI_INFO_NULL, &local);
-        // (2) get the rank of this MPI process on the current node
-        int local_rank;
-        MPI_Comm_rank(local, &local_rank);
-
-        int size;
-        MPI_Comm_size(local, &size);
-        if (size < torch::cuda::device_count()) {
-            if (comm->me == 0) {
-                error->warning(FLERR,
-                    "found {} CUDA-capable GPUs, but only {} MPI processes on the current node; the remaining GPUs will not be used",
-                    torch::cuda::device_count(), size
-                );
-            }
-        }
-
-        // (3) split GPUs between node-local processes using round-robin allocation
-        auto device_index = local_rank % torch::cuda::device_count();
-        device = torch::Device(device_type, static_cast<torch::DeviceIndex>(device_index));
-    } else {
-        device = torch::Device(device_type);
     }
 }
 
@@ -487,44 +387,23 @@ void FixMetatomic::initial_integrate(int /*vflag*/) {
         }
     }
 
-    auto dtype = torch::kFloat64;
-    if (mta_data->capabilities->dtype() == "float64") {
-        dtype = torch::kFloat64;
-    } else if (mta_data->capabilities->dtype() == "float32") {
-        dtype = torch::kFloat32;
-    } else {
-        error->all(FLERR, "the model requested an unsupported dtype '{}'", mta_data->capabilities->dtype());
-    }
+    auto dtype = mta_data->model_dtype(lmp);
+
+    // deal with the model requested inputs
+    auto input_holders = mta_data->collect_requested_inputs();
 
     // transform from LAMMPS to metatomic System
     auto system = this->system_adaptor->system_from_lmp(
         mta_list,
         static_cast<bool>(vflag_global),
         dtype,
-        mta_data->device
+        mta_data->device,
+        input_holders
     );
-
-    // add the required additional inputs, for now FlashMD uses the old names
-    // and does not go through the requested_inputs mechanism.
-    this->system_adaptor->add_masses(system, "masses", 1.0);
-    this->system_adaptor->add_momenta(system, "momenta", this->momentum_conversion_factor);
 
     // Configure selected atoms for evaluation
     // Only run the calculation for atoms in the current group
-    mta_data->selected_atoms_values.resize_({group->count(igroup), 2});
-    mta_data->selected_atoms_values.index_put_({torch::indexing::Slice(), 0}, 0);
-    int64_t idx = 0;
-    for (int i = 0; i < nlocal; i++) {
-        if (mask[i] & groupbit) {
-            mta_data->selected_atoms_values.index_put_({idx, 1}, i);
-            idx++;
-        }
-    }
-
-    auto selected_atoms = torch::make_intrusive<metatensor_torch::LabelsHolder>(
-        std::vector<std::string>{"system", "atom"}, mta_data->selected_atoms_values
-    );
-    mta_data->evaluation_options->set_selected_atoms(selected_atoms);
+    mta_data->set_selected_atoms(atom, groupbit);
 
     // Call the ML model to predict new positions and momenta
     torch::IValue result_ivalue;
@@ -542,7 +421,7 @@ void FixMetatomic::initial_integrate(int /*vflag*/) {
     auto result = result_ivalue.toGenericDict();
 
     // Extract predicted positions
-    auto positions_map = result.at("positions").toCustomClass<metatensor_torch::TensorMapHolder>();
+    auto positions_map = result.at("position").toCustomClass<metatensor_torch::TensorMapHolder>();
     auto positions_block = metatensor_torch::TensorMapHolder::block_by_id(positions_map, 0);
     auto positions = positions_block->values().squeeze(-1).to(torch::kCPU).to(torch::kFloat64);
     auto positions_samples = positions_block->samples()->values().to(torch::kCPU).contiguous();
@@ -551,7 +430,7 @@ void FixMetatomic::initial_integrate(int /*vflag*/) {
     assert(positions_block->samples()->names()[1] == "atom");
 
     // Extract predicted momenta
-    auto momenta_map = result.at("momenta").toCustomClass<metatensor_torch::TensorMapHolder>();
+    auto momenta_map = result.at("momentum").toCustomClass<metatensor_torch::TensorMapHolder>();
     auto momenta_block = metatensor_torch::TensorMapHolder::block_by_id(momenta_map, 0);
     auto momenta = momenta_block->values().squeeze(-1).to(torch::kCPU).to(torch::kFloat64);
 
@@ -650,6 +529,13 @@ void FixMetatomic::initial_integrate(int /*vflag*/) {
             v[i][2] = v[i][2] - com_velocity_new[2] + com_velocity_old[2];
         }
     }
+}
+
+void FixMetatomic::setup(int vflag) {
+    // Zero the forces computed during setup, as post_force() does every step.
+    // Otherwise initial_integrate() applies them as a velocity kick on the
+    // first step of every run.
+    post_force(vflag);
 }
 
 void FixMetatomic::post_force(int /*vflag*/) {

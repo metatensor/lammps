@@ -16,6 +16,7 @@
 
 #include <vector>
 #include <array>
+#include <string>
 
 #include "pointers.h"
 #include "pair.h"
@@ -25,6 +26,8 @@
 
 
 namespace LAMMPS_NS {
+
+struct CommonMetatomicData;
 
 struct MetatomicSystemOptions {
     // Mapping from LAMMPS types to metatomic types.
@@ -67,20 +70,26 @@ public:
         double cutoff, metatomic_torch::NeighborListOptions request
     );
 
+    virtual void configure_neighbor_lists(NeighRequest* request, CommonMetatomicData* mta_data, const char* requester);
+
     // Create a metatomic system matching the LAMMPS system data
     virtual metatomic_torch::System system_from_lmp(
         NeighList* list,
         bool do_virial,
         torch::ScalarType dtype,
-        torch::Device device
+        torch::Device device,
+        const std::map<std::string, torch::intrusive_ptr<metatomic_torch::ModelOutputHolder>>& requested_inputs
     );
 
     // Add masses as extra data to this system, only for atoms which are not
     // periodic images of other atoms
-    virtual void add_masses(metatomic_torch::System& system, std::string name, double unit_conversion);
+    virtual void add_masses(metatomic_torch::System& system, std::string name);
     // Add momenta as extra data to this system, only for atoms which are not
     // periodic images of other atoms
-    virtual void add_momenta(metatomic_torch::System& system, std::string name, double unit_conversion);
+    virtual void add_momenta(metatomic_torch::System& system, std::string name);
+    // Add velocities as extra data to this system, only for atoms which are not
+    // periodic images of other atoms
+    virtual void add_velocities(metatomic_torch::System& system, std::string name);
 
     // Explicit strain for virial calculations. This uses the same dtype/device
     // as LAMMPS data (positions, …)
