@@ -190,7 +190,7 @@ void MetatomicSystemAdaptor::add_nl_request(double cutoff, metatomic_torch::Neig
 
 // Translate from the metatomic neighbor lists requests to LAMMPS neighbor lists requests
 void MetatomicSystemAdaptor::configure_neighbor_lists(NeighRequest* request, CommonMetatomicData* mta_data, const char* requester) {
-    request->set_cutoff(mta_data->max_cutoff);
+    request->set_cutoff_fixed(mta_data->max_cutoff);
 
     auto mincut = mta_data->max_cutoff + neighbor->skin;
     if (strcmp(requester, "pair metatomic") != 0 && comm->get_comm_cutoff() < mincut) {
@@ -315,7 +315,7 @@ void MetatomicSystemAdaptor::guess_periodic_ghosts() {
     // GPU) because ghost positions depend only on the original atom
     // position and exact cell-vector shifts — both of which are
     // order-independent. Picking the closest ghost also gives the most
-    // natural representative for cell-shift calculations.  
+    // natural representative for cell-shift calculations.
     double center[3];
     if (domain->triclinic == 0) {
         center[0] = 0.5 * (domain->sublo[0] + domain->subhi[0]);

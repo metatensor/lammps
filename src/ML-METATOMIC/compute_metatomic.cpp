@@ -21,17 +21,14 @@
 #include "memory.h"
 #include "modify.h"
 #include "error.h"
-#include "group.h"
 #include "force.h"
 #include "update.h"
 #include "neighbor.h"
 #include "neigh_list.h"
-#include "neigh_request.h"
 #include "tokenizer.h"
 #include "comm.h"
 
 #include <vector>
-#include <algorithm>
 
 #include <metatomic/torch.hpp>
 #include <metatensor/torch.hpp>
@@ -271,7 +268,7 @@ ComputeMetatomic::ComputeMetatomic(LAMMPS *lmp, int narg, char **arg): Compute(l
 
     // add the required additional inputs
     mta_data->requested_inputs = mta_data->collect_requested_inputs();
-    
+
     // Initialize the output layout
     if (strcmp(sample_kind.c_str(), "atom") == 0) {
         peratom_flag = 1;
