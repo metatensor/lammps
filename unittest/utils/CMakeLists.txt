@@ -140,7 +140,7 @@ endif()
 if(PKG_KSPACE AND PKG_KOKKOS AND NOT SKIP_FFT_TESTS)
   # Build test_fft3d_kokkos executable
   add_executable(test_fft3d_kokkos test_fft3d_kokkos.cpp ../error_stats.cpp)
-  target_link_libraries(test_fft3d_kokkos PRIVATE lammps GTest::GMockMain $<COMPILE_ONLY:Kokkos::kokkos>)
+  target_link_libraries(test_fft3d_kokkos PRIVATE lammps GTest::GMockMain Kokkos::kokkos)
   if(Kokkos_ENABLE_CUDA)
     target_link_libraries(test_fft3d_kokkos PRIVATE CUDA::cudart)
   endif()
