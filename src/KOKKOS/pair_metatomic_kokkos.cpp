@@ -84,7 +84,7 @@ void PairMetatomicKokkos<DeviceType>::init_style() {
     // request NL with the new adaptor
     auto requested_nl = mta_data->model->run_method("requested_neighbor_lists");
     for (const auto& ivalue: requested_nl.toList()) {
-        auto options = ivalue.get().toCustomClass<metatomic_torch::NeighborListOptionsHolder>();
+        auto options = ivalue.get().template toCustomClass<metatomic_torch::NeighborListOptionsHolder>();
         auto cutoff = options->engine_cutoff(mta_data->evaluation_options->length_unit());
         assert(cutoff <= mta_data->max_cutoff);
 

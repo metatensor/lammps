@@ -42,7 +42,7 @@ public:
    void final_integrate() override;
 
 private:
-   void pick_device(c10::Device& device, const char* requested) override;
+   void pick_device(c10::Device& device, const char* requested);
 
    // Kokkos view for type mapping
    Kokkos::View<int32_t*, Kokkos::LayoutRight, DeviceType> type_mapping_kk;

@@ -53,7 +53,7 @@ public:
     void store_forces(const at::Tensor& forces_tensor) override;
 
 private:
-    void pick_device(c10::Device& device, const char* requested) override;
+    void pick_device(c10::Device& device, const char* requested);
 
     Kokkos::View<int32_t*, Kokkos::LayoutRight, DeviceType> type_mapping_kk;
 };
